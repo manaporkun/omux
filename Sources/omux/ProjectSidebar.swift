@@ -37,7 +37,8 @@ struct ProjectSidebar: View {
     }
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
+        let attention = store.attentionSessions
+        return VStack(spacing: 0) {
             HStack(spacing: 13) {
                 Spacer()
                 Button { store.openFolderPanel() } label: { Image(systemName: "folder.badge.plus") }
@@ -54,23 +55,56 @@ struct ProjectSidebar: View {
             }
             .font(.system(size: 11)).padding(7)
             .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+            .help("Search project names (⌘P). Use Jump to session for cross-project session search.")
             .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 6)
+            Button { store.openSessionFinder() } label: {
+                HStack {
+                    Label("Jump to session…", systemImage: "arrow.turn.down.right")
+                    Spacer()
+                    Text("⌘K").foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .help("Find a session across all projects (⌘K). Search projects above with ⌘P.")
             ScrollView {
                 VStack(alignment: .leading, spacing: 3) {
-                    if !store.attentionSessions.isEmpty {
-                        sectionLabel("Needs you", color: .orange)
-                        ForEach(store.attentionSessions, id: \.tab.id) { entry in
+                    if !attention.isEmpty {
+                        sectionLabel("Needs you (\(attention.count))", color: .orange)
+                        ForEach(attention.prefix(4), id: \.tab.id) { entry in
+                            let runtime = store.runtime[entry.tab.id] ?? TabRuntime()
+                            let reason = runtime.attentionReason ?? "Needs you"
                             Button { store.focusSession(entry.tab.id) } label: {
                                 HStack(spacing: 7) {
-                                    SessionStateDot(state: CanvasSessionState(store.runtime[entry.tab.id] ?? TabRuntime()))
-                                    Text(entry.tab.name).lineLimit(1)
-                                    Spacer(minLength: 2)
-                                    Text(entry.group.name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                    SessionStateDot(state: CanvasSessionState(runtime))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(spacing: 5) {
+                                            Text(entry.tab.name).lineLimit(1).layoutPriority(1)
+                                            Spacer(minLength: 2)
+                                            Text(entry.group.name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                        Text(reason).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                    }
                                 }
                                 .font(.system(size: 11)).padding(.horizontal, 9).padding(.vertical, 7)
                                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                            }.buttonStyle(.plain)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(entry.tab.name), \(reason), project \(entry.group.name)")
+                            .help("\(reason)\(runtime.statusDetail.map { ": \($0)" } ?? "") — \(entry.group.name)")
                         }
+                        Button { store.openSessionFinder(scope: .attention) } label: {
+                            HStack {
+                                Text("View all \(attention.count)")
+                                Spacer()
+                                Image(systemName: "arrow.right")
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).font(.system(size: 11))
+                        .padding(.horizontal, 9).padding(.vertical, 6)
+                        .help("Search all \(attention.count) sessions needing attention across projects")
+                        .accessibilityLabel("View all \(attention.count) sessions needing attention")
                         Divider().padding(.vertical, 9)
                     }
                     sectionLabel(query.isEmpty ? "Projects" : "Results")
@@ -113,18 +147,27 @@ struct ProjectSidebar: View {
                         RenameField(initial: group.name) { store.rename(group.id, to: $0) }
                     } else { Text(group.name).fontWeight(selected ? .semibold : .regular).lineLimit(1) }
                     Spacer(minLength: 2)
-                    if attention > 0 {
+                    if states.count <= 8 && attention > 0 {
                         Text("\(attention)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(Color.orange.opacity(0.9), in: Capsule()).foregroundStyle(.black)
-                    } else if running > 0 {
+                    } else if states.count <= 8 && running > 0 {
                         Text("\(running) running").font(.system(size: 10)).foregroundStyle(.blue).monospacedDigit()
                     }
                 }
-                if selected && !states.isEmpty {
+                if states.count > 8 {
+                    Text("\(states.count) sessions · \(running) running · \(attention) need you")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 20)
+                        .accessibilityLabel("\(group.name): \(states.count) sessions, \(running) working or running, \(attention) need you, have errors, or were interrupted")
+                } else if selected && !states.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(Array(states.enumerated()), id: \.offset) { _, state in SessionStateDot(state: state) }
-                    }.padding(.leading, 20)
+                    }
+                    .padding(.leading, 20)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(states.map(\.label).joined(separator: ", "))
                 }
             }
             .font(.system(size: 12)).padding(.horizontal, 9).padding(.vertical, 9)

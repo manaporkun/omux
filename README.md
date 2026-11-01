@@ -85,8 +85,8 @@ Beta builds, distribution builds and tests are in [docs/building.md](docs/buildi
 | Close session | ⌘W |
 | Rename / edit session | ⌘R / ⌘I |
 | Restart session | ⇧⌘R |
-| Interrupt (Ctrl-C) | ⇧⌘. |
-| Start or continue the session | ⇧⌘↩ |
+| Interrupt current work | ⇧⌘. |
+| Recover/open the active session (state-specific action) | ⇧⌘↩ |
 | Jump to session | ⌘K |
 | Next / previous session | ⇧⌘] / ⇧⌘[ |
 | Session 1–9 in the current project | ⌘1 … ⌘9 |

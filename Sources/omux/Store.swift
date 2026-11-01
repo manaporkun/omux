@@ -43,8 +43,11 @@ final class Store: ObservableObject {
     }
     @Published var renamingID: UUID?
     @Published var editingTabID: UUID?
+    @Published var sessionDetailsID: UUID?
+    @Published var recoveryRequest: SessionRecoveryRequest?
+    @Published var launchRecoveryEntries: [LaunchRecoveryEntry] = []
     @Published var editingGroupID: UUID?
-    @Published var showQuickSwitcher = false
+    @Published var sessionFinderScope: SessionFinderScope?
     @Published var showRecentSessions = false
     @Published var showWelcome = false
     /// A file the user ⌘-clicked in a terminal; the files panel shows it.
@@ -66,7 +69,8 @@ final class Store: ObservableObject {
 
     private var terminals: [UUID: TermView] = [:]
     private let sessionHost = PersistentSessionHost.shared
-    private var hostedSessions: Set<UUID> = []
+    @Published private(set) var sessionHosting: [UUID: SessionHosting] = [:]
+    @Published private var claudeConversations: Set<UUID> = []
     private var sessionWatches: [UUID: DispatchSourceFileSystemObject] = [:]
     private var statusVersions: [UUID: Date] = [:]
     private var queryVersions: [UUID: Date] = [:]
@@ -148,10 +152,27 @@ final class Store: ObservableObject {
             }
         }
         // Restore connections, never agent processes. Missing sessions open as shells when shown.
-        let running = sessionHost.panes()
-        for entry in allTabs {
-            let interrupted = sessionHost.hasRecord(entry.tab.id) && running[entry.tab.id]?.dead != false
-            runtime[entry.tab.id] = TabRuntime(exited: true, interrupted: interrupted)
+        let hostSnapshot = sessionHost.paneSnapshot()
+        let running = hostSnapshot ?? [:]
+        let entries = allTabs
+        let claudeDirectories = entries.contains(where: { $0.tab.resolvedProvider(in: $0.group) == .claude })
+            ? (try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/.claude/projects")) ?? [] : []
+        for entry in entries {
+            let id = entry.tab.id
+            let interrupted = sessionHost.hasRecord(id) && running[id]?.dead != false
+            runtime[id] = TabRuntime(exited: true, interrupted: interrupted)
+            if running[id] != nil || sessionHost.hasRecord(id) {
+                sessionHosting[id] = .managed(hostEvidence(id, snapshot: hostSnapshot))
+            }
+            if entry.tab.resolvedProvider(in: entry.group) == .claude,
+               Self.claudeSessionExists(entry.tab.claudeSessionID.uuidString.lowercased(), in: claudeDirectories) {
+                claudeConversations.insert(id)
+            }
+            if saved != nil, running[id]?.dead != false {
+                let evidence: LaunchRecoveryEntry.Evidence = sessionHost.hasRecord(id)
+                    ? (hostSnapshot == nil ? .unverifiedHost : .missingProcess) : .noVerifiedProcess
+                launchRecoveryEntries.append(LaunchRecoveryEntry(id: id, evidence: evidence))
+            }
         }
         reconnectSessions(running)
         hostTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -194,7 +215,44 @@ final class Store: ObservableObject {
     }
 
     var runningSessionCount: Int {
-        terminals.keys.filter { !(runtime[$0]?.exited ?? false) }.count
+        sessionHosting.reduce(0) { count, entry in
+            if case .managed(.running) = entry.value { return count + 1 }
+            if case .direct = entry.value, terminals[entry.key] != nil, runtime[entry.key]?.exited == false {
+                return count + 1
+            }
+            return count
+        }
+    }
+
+    func openSessionDetails(_ id: UUID) {
+        guard tab(id) != nil else { return }
+        sessionDetailsID = id
+    }
+
+    /// Presentation only: uses the hosting decision and existing polling evidence, never starts a process.
+    func sessionPersistenceDetails(_ id: UUID) -> SessionPersistenceDetails {
+        SessionPersistenceDetails(hosting: sessionHosting[id], exited: runtime[id]?.exited ?? true,
+                                  interrupted: runtime[id]?.interrupted ?? false,
+                                  prerequisite: sessionHosting[id] == nil ? sessionHost.directSessionReason : nil)
+    }
+
+    private func isHosted(_ id: UUID) -> Bool { sessionHosting[id]?.isManaged == true }
+
+    private func setHosting(_ hosting: SessionHosting, for id: UUID) {
+        if sessionHosting[id] != hosting { sessionHosting[id] = hosting }
+    }
+
+    private func hostEvidence(_ id: UUID, snapshot: [UUID: PersistentSessionHost.Pane]?) -> HostedProcessEvidence {
+        guard let snapshot else {
+            let reason: String
+            switch sessionHost.prerequisiteIssue {
+            case .tmuxUnavailable: reason = "tmux is unavailable. Install tmux, then reopen omux to check the session host."
+            case .relayUnavailable: reason = "The bundled session relay is missing or not executable. Reinstall or rebuild omux to restore host support."
+            default: reason = "The session host could not be queried. It may have stopped or become inaccessible. Check Persistence Help before restarting a session whose process may still exist."
+            }
+            return .unavailable(reason)
+        }
+        return snapshot[id]?.dead == false ? .running : .ended
     }
 
     // MARK: Terminal lifecycle
@@ -269,10 +327,11 @@ final class Store: ObservableObject {
         if let worktree = tab.worktree { env["OMUX_REPO"] = worktree.repo }
 
         let attachment: PersistentSessionHost.Attachment?
+        let directReason = sessionHost.directSessionReason
         do {
-            if sessionHost.enabled || sessionHost.hasRecord(tab.id) || sessionHost.pane(tab.id) != nil {
+            if directReason == nil || sessionHost.hasRecord(tab.id) || sessionHost.pane(tab.id) != nil {
                 attachment = try sessionHost.ensure(tab.id, cwd: dir, shell: shell, environment: env)
-                hostedSessions.insert(tab.id)
+                setHosting(.managed(.running), for: tab.id)
                 if attachment?.reused == true {
                     let history = sessionHost.capture(tab.id)
                     if !history.isEmpty { view.feed(text: history.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n") }
@@ -282,15 +341,25 @@ final class Store: ObservableObject {
                                   environment: env.map { "\($0.key)=\($0.value)" }, currentDirectory: dir)
             } else {
                 attachment = nil
-                if sessionHost.requested && !warnedAboutHost {
+                // Capture the actual fallback now; later preference changes must not rewrite it.
+                setHosting(.direct(directReason!), for: tab.id)
+                if directReason != .disabled && !warnedAboutHost {
                     warnedAboutHost = true
                     Notices.shared.post("Sessions will stop when omux closes",
-                                        detail: sessionHost.binary == nil ? "Install tmux to enable persistent sessions." : "The session relay is missing. Rebuild the app to enable persistence.", isError: true)
+                                        detail: directReason!.prerequisiteExplanation, isError: true)
                 }
                 view.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
                                   execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: dir)
             }
         } catch {
+            let snapshot = sessionHost.paneSnapshot()
+            if snapshot?[tab.id]?.dead == false {
+                setHosting(.managed(.running), for: tab.id)
+            } else if snapshot == nil, sessionHost.hasRecord(tab.id) {
+                setHosting(.managed(hostEvidence(tab.id, snapshot: nil)), for: tab.id)
+            } else {
+                setHosting(.failed(error.localizedDescription), for: tab.id)
+            }
             update(tab.id) { $0.provider = provider; $0.exited = true; $0.statusState = .error; $0.statusDetail = error.localizedDescription }
             return
         }
@@ -367,7 +436,8 @@ final class Store: ObservableObject {
     /// Kills the shell and everything it spawned (claude, node, …), not just the shell.
     private func killTree(_ view: TermView) {
         pendingCommands[view.tabID] = nil
-        if hostedSessions.remove(view.tabID) != nil {
+        if isHosted(view.tabID) {
+            setHosting(.managed(.ended), for: view.tabID)
             sessionWatches.removeValue(forKey: view.tabID)?.cancel()
             statusVersions[view.tabID] = nil; queryVersions[view.tabID] = nil
             sessionHost.reset(view.tabID)
@@ -377,22 +447,53 @@ final class Store: ObservableObject {
         view.terminate()
     }
 
-    /// Stops a session: its whole process tree is killed and the tab shows as stopped.
-    /// Interrupts whatever runs in the shell, like Ctrl-C. Sent twice because Claude Code
-    /// asks for a second Ctrl-C to exit. The shell itself stays at its prompt.
-    func stop(_ id: UUID) {
+    func interruptionHelp(_ id: UUID) -> String {
         if runtime[id]?.provider == .codex {
-            if codexStarts[id] != nil { kill(id); return }
+            if codexStarts[id] != nil {
+                return "Codex is still connecting; there is no active turn to interrupt yet. Wait for it to connect, or use End Session to terminate it."
+            }
+            return CodexManager.shared.interruptionUnavailableReason(id)
+                ?? "Interrupt the active Codex turn through its protocol, without ending the session."
+        }
+        if terminals[id] == nil || runtime[id]?.exited != false {
+            return "There is no running terminal to interrupt. Use the session’s explicit recovery action first."
+        }
+        return "Send one Ctrl-C to the current program. The program decides how to handle it; omux does not send a second exit sequence."
+    }
+
+    /// Interrupts current work, never deliberately exits the agent or its shell.
+    func interrupt(_ id: UUID) {
+        if runtime[id]?.provider == .codex {
+            if codexStarts[id] != nil {
+                Notices.shared.post("Codex is still connecting", detail: interruptionHelp(id), isError: false)
+                return
+            }
+            if let reason = CodexManager.shared.interruptionUnavailableReason(id) {
+                Notices.shared.post("Codex wasn't interrupted", detail: reason, isError: false)
+                return
+            }
             Task {
                 do { try await CodexManager.shared.interrupt(id) }
                 catch { Self.showError("Couldn't interrupt Codex", error.localizedDescription) }
             }
             return
         }
-        guard let view = terminals[id], !(runtime[id]?.exited ?? true) else { return }
+        guard let view = terminals[id], runtime[id]?.exited == false else {
+            Notices.shared.post("No running terminal", detail: interruptionHelp(id), isError: false)
+            return
+        }
+        pendingCommands[id] = nil
         view.send(txt: "\u{03}")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { view.send(txt: "\u{03}") }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.refreshBusy(id) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak view] in
+            guard let self, let view, self.terminals[id] === view else { return }
+            self.refreshBusy(id)
+            // A returned shell prompt must not retain the interrupted program's OSC status.
+            if self.runtime[id]?.busy == false, self.runtime[id]?.exited == false {
+                self.update(id) {
+                    $0.statusState = nil; $0.statusKind = nil; $0.statusDetail = nil; $0.statusChildren = []
+                }
+            }
+        }
     }
 
     /// Force-kills the session's whole process tree; the tab shows as exited.
@@ -475,7 +576,8 @@ final class Store: ObservableObject {
     /// Re-checks whether the shell has a child process (claude, a build, …).
     func refreshBusy(_ id: UUID, panePID: pid_t? = nil, knownBusy: Bool? = nil) {
         guard let view = terminals[id], !(runtime[id]?.exited ?? true) else { return }
-        let pid = panePID ?? (hostedSessions.contains(id) ? sessionHost.pane(id)?.pid ?? 0 : view.process.shellPid)
+        let pid = panePID ?? (isHosted(id) ? sessionHost.pane(id)?.pid ?? 0 : view.process.shellPid)
+        let wasBusy = runtime[id]?.busy == true
         let busy = knownBusy ?? (pid > 0 && Self.hasChildProcess(of: pid))
         if runtime[id]?.provider == .codex {
             guard codexStarts[id] == nil else { return }
@@ -483,6 +585,7 @@ final class Store: ObservableObject {
             return
         }
         update(id) { $0.busy = busy }
+        if wasBusy && !busy { refreshClaudeConversation(id) }
     }
 
     private static func hasChildProcess(of pid: pid_t) -> Bool { parentProcessIDs().contains(pid) }
@@ -497,8 +600,109 @@ final class Store: ObservableObject {
         return Set(procs.prefix(size / MemoryLayout<kinfo_proc>.stride).map { $0.kp_eproc.e_ppid })
     }
 
+    func recoveryAction(_ id: UUID) -> SessionRecoveryAction {
+        guard let loc = location(of: id) else { return .unavailable("This session has been closed.") }
+        if pendingCommands[id] != nil || codexStarts[id] != nil {
+            return .unavailable("This session is starting or connecting. Wait for it to finish; no second launch was submitted.")
+        }
+        let tab = groups[loc.group].tabs[loc.tab]
+        return SessionRecoveryAction.resolve(
+            tab: tab, group: groups[loc.group], runtime: runtime[id] ?? TabRuntime(exited: true),
+            hosting: sessionHosting[id], claudeConversationExists: claudeConversations.contains(id),
+            codexConnected: CodexManager.shared.isConnected(id))
+    }
+
+    func requestRecovery(_ id: UUID) {
+        let previous = recoveryAction(id)
+        refreshClaudeConversation(id)
+        refreshBusy(id)
+        let action = recoveryAction(id)
+        if case .reopenConversation(.claude) = previous, case .startAgent = action {
+            Notices.shared.post("Saved conversation is unavailable",
+                                detail: "No replacement conversation was started. Review the updated action before starting a new conversation.", isError: true)
+            return
+        }
+        switch action {
+        case .unavailable(let reason):
+            Notices.shared.post("Session recovery unavailable", detail: reason, isError: false)
+        case .runCommand(let command):
+            presentRecoveryReview(id, command: command, restarting: false)
+        default:
+            performStart(id)
+            launchRecoveryEntries.removeAll { $0.id == id }
+        }
+    }
+
+    func requestRestart(_ id: UUID) {
+        refreshClaudeConversation(id)
+        if let command = commandRequiringReview(id) {
+            presentRecoveryReview(id, command: command, restarting: true)
+        } else {
+            performRestart(id)
+            launchRecoveryEntries.removeAll { $0.id == id }
+        }
+    }
+
+    private func commandRequiringReview(_ id: UUID) -> String? {
+        guard let loc = location(of: id) else { return nil }
+        let tab = groups[loc.group].tabs[loc.tab], group = groups[loc.group]
+        let provider = tab.resolvedProvider(in: group)
+        var raw = (tab.command ?? group.command ?? provider.command).trimmingCharacters(in: .whitespaces)
+        if raw.isEmpty, provider == .claude { raw = provider.command }
+        guard provider != .shell, provider == .custom || raw != provider.command else { return nil }
+        return startupCommand(tab: tab, group: group)
+    }
+
+    private func recoveryDirectory(_ id: UUID, restarting: Bool) -> String {
+        guard let tab = tab(id) else { return NSHomeDirectory() }
+        let configured = directory(of: tab) ?? NSHomeDirectory()
+        if !restarting, terminals[id] != nil, runtime[id]?.exited == false {
+            return runtime[id]?.cwd ?? configured
+        }
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: configured, isDirectory: &isDirectory) && isDirectory.boolValue
+            ? configured : NSHomeDirectory()
+    }
+
+    private func presentRecoveryReview(_ id: UUID, command: String, restarting: Bool) {
+        guard let tab = tab(id) else { return }
+        recoveryRequest = SessionRecoveryRequest(tabID: id, name: tab.name,
+                                                directory: recoveryDirectory(id, restarting: restarting),
+                                                command: command, restarting: restarting)
+    }
+
+    func confirmRecovery(_ request: SessionRecoveryRequest) {
+        guard recoveryRequest?.id == request.id else { return }
+        refreshClaudeConversation(request.tabID)
+        refreshBusy(request.tabID)
+        let command: String?
+        if request.restarting {
+            command = commandRequiringReview(request.tabID)
+        } else if case .runCommand(let current) = recoveryAction(request.tabID) {
+            command = current
+        } else { command = nil }
+        guard command == request.command,
+              recoveryDirectory(request.tabID, restarting: request.restarting) == request.directory else {
+            recoveryRequest = nil
+            Notices.shared.post("Session changed during review",
+                                detail: "Nothing was run. Review the current command, directory, and session state again.", isError: true)
+            return
+        }
+        recoveryRequest = nil
+        if request.restarting { performRestart(request.tabID, command: request.command) }
+        else { performStart(request.tabID, reviewedCommand: request.command) }
+        launchRecoveryEntries.removeAll { $0.id == request.tabID }
+    }
+
+    private func refreshClaudeConversation(_ id: UUID) {
+        guard let tab = tab(id), let group = group(containing: id), tab.resolvedProvider(in: group) == .claude else { return }
+        let exists = Self.claudeSessionExists(tab.claudeSessionID.uuidString.lowercased())
+        if exists, !claudeConversations.contains(id) { claudeConversations.insert(id) }
+        else if !exists, claudeConversations.contains(id) { claudeConversations.remove(id) }
+    }
+
     /// Starts the selected provider in an idle shell or resumes its exact saved chat.
-    func start(_ id: UUID) {
+    private func performStart(_ id: UUID, reviewedCommand: String? = nil) {
         guard let loc = location(of: id), pendingCommands[id] == nil else { return }
         focusSession(id)
         let tab = groups[loc.group].tabs[loc.tab]
@@ -512,14 +716,16 @@ final class Store: ObservableObject {
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
             if runtime[id]?.provider == .codex, runtime[id]?.statusState == .error,
                !CodexManager.shared.isConnected(id) {
-                if hostedSessions.contains(id), sessionHost.pane(id, server: true)?.dead == false {
+                if isHosted(id), sessionHost.pane(id, server: true)?.dead == false {
                     startCodex(view, tab: tab, cwd: runtime[id]?.cwd ?? NSHomeDirectory(), reattach: true)
-                } else { restart(id) }
+                } else { performRestart(id, command: reviewedCommand) }
                 return
             }
-            let pid = hostedSessions.contains(id) ? sessionHost.pane(id)?.pid ?? 0 : view.process.shellPid
+            let pid = isHosted(id) ? sessionHost.pane(id)?.pid ?? 0 : view.process.shellPid
             guard !Self.hasChildProcess(of: pid), codexStarts[id] == nil else { return }
-            if runtime[id]?.provider != tab.resolvedProvider(in: groups[loc.group]) { restart(id); return }
+            if runtime[id]?.provider != tab.resolvedProvider(in: groups[loc.group]) {
+                update(id) { $0.provider = tab.resolvedProvider(in: groups[loc.group]); $0.agentConnected = false }
+            }
         }
         if runtime[id]?.interrupted == true {
             try? sessionHost.setNeedsResume(false, id: id)
@@ -530,15 +736,15 @@ final class Store: ObservableObject {
                 // A live Codex TUI is not an idle shell, even when its agent is idle.
                 if provider(of: tab) == .codex {
                     startCodex(view, tab: tab, cwd: runtime[id]?.cwd ?? directory(of: tab) ?? NSHomeDirectory())
-                } else if let command = startupCommand(tab: tab, group: groups[loc.group]), !command.isEmpty {
+                } else if let command = reviewedCommand ?? startupCommand(tab: tab, group: groups[loc.group]), !command.isEmpty {
                     view.send(txt: command + "\n")
                 }
             } else {
-                restart(id)
+                performRestart(id, command: reviewedCommand)
             }
             return
         }
-        guard let command = startupCommand(tab: tab, group: groups[loc.group]) else { return }
+        guard let command = reviewedCommand ?? startupCommand(tab: tab, group: groups[loc.group]) else { return }
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
             guard !(runtime[id]?.busy ?? false) else { return }
             view.send(txt: command + "\n")
@@ -563,9 +769,9 @@ final class Store: ObservableObject {
     }
 
     /// Claude Code writes each conversation to ~/.claude/projects/<project>/<session>.jsonl.
-    private static func claudeSessionExists(_ session: String) -> Bool {
+    private static func claudeSessionExists(_ session: String, in directories: [String]? = nil) -> Bool {
         let projects = NSHomeDirectory() + "/.claude/projects"
-        guard let dirs = try? FileManager.default.contentsOfDirectory(atPath: projects) else { return false }
+        let dirs = directories ?? (try? FileManager.default.contentsOfDirectory(atPath: projects)) ?? []
         return dirs.contains { FileManager.default.fileExists(atPath: "\(projects)/\($0)/\(session).jsonl") }
     }
 
@@ -593,7 +799,8 @@ final class Store: ObservableObject {
     /// Opens an existing Claude conversation as a session in the project for its folder.
     func openClaudeSession(_ recent: RecentSession) {
         if let existing = allTabs.first(where: { $0.tab.claudeSessionID == recent.id && provider(of: $0.tab) == .claude }) {
-            start(existing.tab.id)
+            focusSession(existing.tab.id)
+            if recoveryAction(existing.tab.id).isAvailable { requestRecovery(existing.tab.id) }
             return
         }
         let gi: Int
@@ -615,7 +822,8 @@ final class Store: ObservableObject {
 
     func openCodexSession(_ recent: CodexConversation) {
         if let existing = allTabs.first(where: { $0.tab.codexThreadID == recent.id && provider(of: $0.tab) == .codex }) {
-            start(existing.tab.id)
+            focusSession(existing.tab.id)
+            if recoveryAction(existing.tab.id).isAvailable { requestRecovery(existing.tab.id) }
             return
         }
         let groupID: UUID
@@ -660,10 +868,14 @@ final class Store: ObservableObject {
             update(id) { $0.cwd = dir }
         case .exited:
             guard !terminating else { return }
-            let alive = hostedSessions.contains(id) && sessionHost.pane(id)?.dead == false
+            let snapshot = isHosted(id) ? sessionHost.paneSnapshot() : nil
+            let alive = snapshot?[id]?.dead == false
+            if isHosted(id) {
+                setHosting(.managed(hostEvidence(id, snapshot: snapshot)), for: id)
+            }
             update(id) {
                 $0.exited = true; $0.statusState = alive ? .error : nil
-                $0.statusDetail = alive ? "Terminal disconnected; the session is still running. Press Start to reconnect." : nil
+                $0.statusDetail = alive ? "Terminal disconnected; the session is still running. Use Reconnect terminal to reattach." : nil
                 $0.statusKind = nil; $0.statusChildren = []; $0.busy = false
             }
         case .openPath(let path):
@@ -804,6 +1016,8 @@ final class Store: ObservableObject {
             view.removeFromSuperview()
         }
         runtime[id] = nil
+        sessionHosting[id] = nil
+        if sessionDetailsID == id { sessionDetailsID = nil }
         Notifier.shared.clear(tabID: id)
         browsers.removeValue(forKey: id)?.close()
         if openAgent?.tabID == id { openAgent = nil }
@@ -817,7 +1031,7 @@ final class Store: ObservableObject {
         }
     }
 
-    func restart(_ id: UUID) {
+    private func performRestart(_ id: UUID, command: String? = nil) {
         closeCodex(id)
         guard let loc = location(of: id) else { return }
         if let view = terminals.removeValue(forKey: id) {
@@ -827,7 +1041,7 @@ final class Store: ObservableObject {
             // Restart is explicit even if the persistent session has no attached view.
             sessionHost.reset(id)
         }
-        makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group], startProvider: true)
+        makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group], command: command, startProvider: true)
         focusSession(id)
         objectWillChange.send()
     }
@@ -985,13 +1199,15 @@ final class Store: ObservableObject {
         CodexManager.shared.shutdown(keepServers: true)
         for (id, view) in terminals {
             view.onEvent = nil
-            if hostedSessions.contains(id) { view.terminate() }
+            if isHosted(id) { view.terminate() }
             else { killTree(view) }
         }
     }
 
     var persistentSessionCount: Int {
-        hostedSessions.filter { sessionHost.pane($0)?.dead == false }.count
+        sessionHosting.reduce(0) { count, entry in
+            count + (entry.value.isManaged && sessionHost.pane(entry.key)?.dead == false ? 1 : 0)
+        }
     }
 
     private func watchHostedSession(_ id: UUID, view: TermView) {
@@ -1034,11 +1250,12 @@ final class Store: ObservableObject {
 
     private func refreshHostedSessions() {
         guard !terminating else { return }
-        guard !hostedSessions.isEmpty else { return }
-        let panes = sessionHost.panes()
+        guard sessionHosting.contains(where: { $0.value.isManaged }) else { return }
+        let snapshot = sessionHost.paneSnapshot()
         let parents = Self.parentProcessIDs()
-        for id in hostedSessions {
-            if let pane = panes[id], !pane.dead {
+        for (id, hosting) in sessionHosting where hosting.isManaged {
+            setHosting(.managed(hostEvidence(id, snapshot: snapshot)), for: id)
+            if let pane = snapshot?[id], !pane.dead {
                 if let cwd = pane.cwd { update(id) { $0.cwd = cwd } }
                 if runtime[id]?.exited == false { refreshBusy(id, panePID: pane.pid, knownBusy: parents.contains(pane.pid)) }
             } else if runtime[id]?.exited == false {
@@ -1050,6 +1267,19 @@ final class Store: ObservableObject {
 
 
 extension Store {
+    /// Every general entry point starts unscoped; attention callers must opt in explicitly.
+    func openSessionFinder(scope: SessionFinderScope = .all) {
+        sessionFinderScope = scope
+    }
+
+    /// Sheet dismissal can restore the old responder after the finder selected another terminal.
+    /// Reassert keyboard focus without revealing sessions, changing filters, or starting processes.
+    func refocusActiveTerminal() {
+        guard let id = commandTargetID, let terminal = terminals[id],
+              let window = terminal.window, window.attachedSheet == nil else { return }
+        window.makeFirstResponder(terminal)
+    }
+
     var attentionSessions: [(tab: TabItem, group: TabGroup)] {
         allTabs.filter {
             let state = runtime[$0.tab.id] ?? TabRuntime(exited: true)

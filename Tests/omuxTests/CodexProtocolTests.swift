@@ -166,4 +166,51 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertNil(manager.approval(for: tab))
     }
 
+    /// Broader policy/session grants and turn cancellation must not become plain Allow/Deny.
+    @MainActor
+    func testUnavailableDecisionsNeverFallBackToBroaderApprovalOrCancellation() async throws {
+        let manager = CodexManager(), tab = UUID()
+        manager.register(tabID: tab, threadID: "root")
+        manager.receive(["method": "turn/started", "params": ["threadId": "root", "turn": ["id": "turn"]]], owner: tab)
+        manager.receive(["id": 12, "method": "item/commandExecution/requestApproval", "params": [
+            "threadId": "root", "turnId": "turn", "command": "deploy",
+            "availableDecisions": ["acceptForSession", "cancel",
+                                   ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": ["deploy"]]]]
+        ]], owner: tab)
+        let approval = try XCTUnwrap(manager.approval(for: tab))
+        for allow in [true, false] {
+            XCTAssertFalse(approval.supportsDecision(allow: allow))
+            do {
+                try await manager.answer(approval, tabID: tab, allow: allow)
+                XCTFail("An unsupported decision must be rejected before contacting a server")
+            } catch CodexError.server {
+                // Expected local rejection, not a connection error or a fallback response.
+            }
+            XCTAssertEqual(manager.approval(for: tab), approval)
+            XCTAssertTrue(manager.answering.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testApprovalIdentityUsesOwnedThreadMapsNotRequestActorMetadata() throws {
+        let manager = CodexManager(), tab = UUID(), other = UUID()
+        manager.register(tabID: tab, threadID: "root")
+        manager.register(tabID: other, threadID: "other")
+        manager.receive(["method": "thread/started", "params": ["thread": [
+            "id": "child", "parentThreadId": "root", "agentNickname": "Reviewer"
+        ]]], owner: tab)
+        manager.receive(["method": "turn/started", "params": ["threadId": "child", "turn": ["id": "turn"]]], owner: tab)
+        manager.receive(["id": 9, "method": "item/commandExecution/requestApproval", "params": [
+            "threadId": "child", "turnId": "turn", "command": "git status",
+            "agentNickname": "Root", "parentThreadId": "other"
+        ]], owner: tab)
+        let approval = try XCTUnwrap(manager.approval(for: tab))
+        let actor = try XCTUnwrap(manager.approvalActor(approval, tabID: tab))
+        XCTAssertEqual(actor.rootThreadID, "root")
+        XCTAssertEqual(actor.agent?.id, "child")
+        XCTAssertEqual(actor.agent?.name, "Reviewer")
+        XCTAssertNil(manager.approvalActor(approval, tabID: other))
+        XCTAssertNil(manager.approval(for: other))
+    }
+
 }

@@ -95,8 +95,55 @@ final class WorkspaceLayoutTests: XCTestCase {
         XCTAssertEqual(state, .interrupted)
         XCTAssertTrue(state.needsAttention)
         XCTAssertTrue(CanvasFilter.needsYou.includes(state))
-        XCTAssertTrue(CanvasFilter.idle.includes(state))
+        XCTAssertFalse(CanvasFilter.idle.includes(state))
         XCTAssertFalse(CanvasFilter.working.includes(state))
+    }
+
+    func testFilterPartitionsMatchesBetweenGridAndShelfWithoutHidingOtherShelfSessions() {
+        let tabs = [
+            TabItem(name: "Visible work"), TabItem(name: "Shelved work"),
+            TabItem(name: "Shelved idle"), TabItem(name: "Visible idle")
+        ]
+        let states: [UUID: CanvasSessionState] = [
+            tabs[0].id: .working, tabs[1].id: .running,
+            tabs[2].id: .idle, tabs[3].id: .idle
+        ]
+        let result = CanvasFilterResult(
+            tabs: tabs, minimized: [tabs[1].id, tabs[2].id], filter: .working,
+            state: { states[$0.id]! }
+        )
+        XCTAssertEqual(result.visible.map(\.id), [tabs[0].id])
+        XCTAssertEqual(result.shelf.map(\.id), [tabs[1].id, tabs[2].id])
+        XCTAssertEqual(result.matchingShelf.map(\.id), [tabs[1].id])
+        XCTAssertEqual(result.matchingCount, 2)
+
+        // The same matching subset drives Restore matching: unrelated sessions stay shelved.
+        var minimized: Set<UUID> = [tabs[1].id, tabs[2].id]
+        minimized.subtract(result.matchingShelf.map(\.id))
+        let restored = CanvasFilterResult(tabs: tabs, minimized: minimized, filter: .working, state: { states[$0.id]! })
+        XCTAssertEqual(restored.visible.map(\.id), [tabs[0].id, tabs[1].id])
+        XCTAssertEqual(restored.shelf.map(\.id), [tabs[2].id])
+        XCTAssertTrue(restored.matchingShelf.isEmpty)
+        XCTAssertEqual(restored.matchingCount, result.matchingCount)
+    }
+
+    func testNoMatchingShelfSessionsDoesNotHideShelfOrOfferUnrelatedRestoreTargets() {
+        let tabs = [TabItem(name: "Interrupted"), TabItem(name: "Ended")]
+        let states: [UUID: CanvasSessionState] = [tabs[0].id: .interrupted, tabs[1].id: .ended]
+        let minimized = Set(tabs.map(\.id))
+        let working = CanvasFilterResult(tabs: tabs, minimized: minimized, filter: .working, state: { states[$0.id]! })
+        XCTAssertTrue(working.visible.isEmpty)
+        XCTAssertEqual(working.shelf.map(\.id), tabs.map(\.id))
+        XCTAssertTrue(working.matchingShelf.isEmpty)
+        XCTAssertEqual(working.matchingCount, 0)
+
+        let attention = CanvasFilterResult(tabs: tabs, minimized: minimized, filter: .needsYou, state: { states[$0.id]! })
+        XCTAssertEqual(attention.matchingShelf.map(\.id), [tabs[0].id])
+        let idle = CanvasFilterResult(tabs: tabs, minimized: minimized, filter: .idle, state: { states[$0.id]! })
+        XCTAssertEqual(idle.matchingShelf.map(\.id), [tabs[1].id])
+        let all = CanvasFilterResult(tabs: tabs, minimized: minimized, filter: .all, state: { states[$0.id]! })
+        XCTAssertEqual(all.matchingShelf.map(\.id), tabs.map(\.id))
+        XCTAssertEqual(all.matchingCount, tabs.count)
     }
 
 }

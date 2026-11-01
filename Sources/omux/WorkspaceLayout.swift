@@ -112,7 +112,34 @@ enum CanvasFilter: String, CaseIterable, Identifiable {
         case .all: return true
         case .needsYou: return state.needsAttention
         case .working: return state == .working || state == .running
-        case .idle: return state == .idle || state == .ended || state == .interrupted
+        case .idle: return state == .idle || state == .ended
         }
+    }
+}
+
+/// Filter matches are partitioned without hiding unrelated shelf entries.
+struct CanvasFilterResult {
+    let visible: [TabItem]
+    let shelf: [TabItem]
+    let matchingShelf: [TabItem]
+    var matchingCount: Int { visible.count + matchingShelf.count }
+
+    init(tabs: [TabItem], minimized: Set<UUID>, filter: CanvasFilter,
+         state: (TabItem) -> CanvasSessionState) {
+        var visible: [TabItem] = []
+        var shelf: [TabItem] = []
+        var matchingShelf: [TabItem] = []
+        for tab in tabs {
+            let matches = filter.includes(state(tab))
+            if minimized.contains(tab.id) {
+                shelf.append(tab)
+                if matches { matchingShelf.append(tab) }
+            } else if matches {
+                visible.append(tab)
+            }
+        }
+        self.visible = visible
+        self.shelf = shelf
+        self.matchingShelf = matchingShelf
     }
 }

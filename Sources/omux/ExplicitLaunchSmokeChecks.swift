@@ -79,11 +79,17 @@ enum ExplicitLaunchSmokeChecks {
                 }
                 checks.append("A missing persistent pane restores as an interrupted shell without replaying its command")
 
-                store.start(interrupted.id)
+                store.requestRecovery(interrupted.id)
+                guard let review = store.recoveryRequest, markerCount(marker) == 0 else {
+                    throw Failure("Configured command ran before explicit recovery review")
+                }
+                store.confirmRecovery(review)
                 try await Task.sleep(for: .milliseconds(700))
                 guard markerCount(marker) == 1, !host.needsResume(interrupted.id),
                       store.runtime[interrupted.id]?.interrupted == false else { throw Failure("Explicit Start did not run exactly once and clear interruption") }
-                store.restart(interrupted.id)
+                store.requestRestart(interrupted.id)
+                guard let restartReview = store.recoveryRequest else { throw Failure("Restart skipped configured-command review") }
+                store.confirmRecovery(restartReview)
                 try await Task.sleep(for: .milliseconds(800))
                 guard markerCount(marker) == 2 else { throw Failure("Explicit Restart did not run exactly once") }
                 store.newTab(in: group.id, command: command)

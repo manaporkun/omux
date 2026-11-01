@@ -467,20 +467,29 @@ struct AgentRows: View {
 
 /// "●●● 3 agents" in the header strip; opens the list of the session's agents.
 struct AgentPill: View {
+    @EnvironmentObject var store: Store
     @ObservedObject private var monitor = AgentMonitor.shared
     let tabID: UUID
+    var compact = false
     @ViewState private var open = false
 
     var body: some View {
         let agents = monitor.agents[tabID] ?? []
         if !agents.isEmpty {
             let running = agents.filter { !$0.finished }.count
-            Button { open.toggle() } label: {
+            Button {
+                store.focusSession(tabID)
+                open.toggle()
+            } label: {
                 HStack(spacing: 5) {
-                    HStack(spacing: 2) {
-                        ForEach(agents.prefix(8)) { AgentDot(agent: $0, size: 6) }
+                    if !compact {
+                        HStack(spacing: 2) {
+                            ForEach(agents.prefix(8)) { AgentDot(agent: $0, size: 6) }
+                        }
+                    } else {
+                        Image(systemName: "person.2")
                     }
-                    Text(running == 0 ? "agents done" : "\(running) agent\(running == 1 ? "" : "s")")
+                    Text(compact ? "\(agents.count)" : running == 0 ? "agents done" : "\(running) agent\(running == 1 ? "" : "s")")
                 }
                 .padding(.horizontal, 7)
                 .frame(height: 18)
@@ -490,7 +499,8 @@ struct AgentPill: View {
             }
             .buttonStyle(.plain)
             .fixedSize()
-            .help("Subagents in this session")
+            .help("\(agents.count) subagents · \(running) running · \(agents.count - running) done")
+            .accessibilityLabel("\(agents.count) subagents, \(running) running, \(agents.count - running) done")
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 AgentList(tabID: tabID) { open = false }
             }
@@ -518,6 +528,7 @@ struct AgentList: View {
                 VStack(spacing: 2) {
                     ForEach(agents) { agent in
                         Button {
+                            store.focusSession(tabID)
                             store.openAgentTranscript(agent, in: tabID)
                             dismiss()
                         } label: { row(agent) }

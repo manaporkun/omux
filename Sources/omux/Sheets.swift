@@ -4,61 +4,163 @@ import SwiftUI
 struct QuickSwitcher: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
+    let scope: SessionFinderScope
     @ViewState private var query = ""
-    @FocusState private var focused: Bool
+    @ViewState private var selection = SessionFinderSelection()
 
-    private struct Match: Identifiable {
-        let tab: TabItem
-        let group: TabGroup
-        var id: UUID { tab.id }
-    }
+    private static let resultLimit = 15
 
-    private var matches: [Match] {
-        store.allTabs
-            .map { Match(tab: $0.tab, group: $0.group) }
-            .filter { m in
-                query.isEmpty ||
-                    "\(m.tab.name) \(m.group.name) \(store.runtime[m.tab.id]?.title ?? "")"
-                    .localizedCaseInsensitiveContains(query)
-            }
+    private var matches: [SessionFinderMatch] {
+        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        return store.allTabs.compactMap {
+            let match = SessionFinderMatch(tab: $0.tab, group: $0.group,
+                                           runtime: store.runtime[$0.tab.id] ?? TabRuntime(exited: true))
+            return match.matches(terms: terms, scope: scope) ? match : nil
+        }
     }
 
     var body: some View {
+        let allMatches = matches
+        let visible = Array(allMatches.prefix(Self.resultLimit))
+        let ids = visible.map(\.id)
         VStack(spacing: 0) {
-            TextField("Jump to session…", text: $query)
-                .textFieldStyle(.plain)
-                .font(.title3)
-                .padding(12)
-                .focused($focused)
-                .onSubmit { if let first = matches.first { pick(first.id) } }
-            Divider()
-            List(matches.prefix(15)) { match in
-                Button { pick(match.id) } label: {
-                    HStack {
-                        Circle()
-                            .fill(store.runtime[match.id]?.statusColor ?? match.tab.color.color ?? Color.secondary.opacity(0.35))
-                            .frame(width: 8, height: 8)
-                        Text(match.tab.name)
-                        Text(match.group.name).foregroundStyle(.secondary)
-                        Spacer()
-                        if let line = store.runtime[match.id]?.statusLine() {
-                            Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+            HStack {
+                Text(scope.label).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("↑ ↓ select · Return open").font(.caption).foregroundStyle(.secondary)
             }
-            .listStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            SessionFinderQueryField(
+                text: $query,
+                move: { selection.move($0, in: ids) },
+                submit: { if let id = selection.id, ids.contains(id) { pick(id) } },
+                cancel: { dismiss() }
+            )
+            .frame(height: 24)
+            .padding(12)
+            Divider()
+            if visible.isEmpty {
+                VStack(spacing: 6) {
+                    Text("No matching sessions").font(.headline)
+                    Text(query.isEmpty ? "No sessions in this scope." : "Try another name, directory or branch.")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    List(visible) { match in
+                        Button { pick(match.id) } label: {
+                            HStack(spacing: 8) {
+                                SessionStateDot(state: CanvasSessionState(match.runtime))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack {
+                                        Text(match.tab.name).fontWeight(.medium)
+                                        Text(match.group.name).foregroundStyle(.secondary)
+                                        Spacer(minLength: 0)
+                                        if let branch = match.tab.worktree?.branch {
+                                            Label(branch, systemImage: "arrow.triangle.branch")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Text((match.directory as NSString).abbreviatingWithTildeInPath)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if let line = scope == .attention ? match.runtime.attentionReason : match.runtime.statusLine(showFolder: false) {
+                                        Text(line).font(.caption).foregroundStyle(.secondary)
+                                            .help(match.runtime.statusDetail ?? line)
+                                    }
+                                }
+                                .lineLimit(1)
+                            }
+                            .padding(.vertical, 3)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .id(match.id)
+                        .listRowBackground(selection.id == match.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                        .accessibilityIdentifier("session-finder-result-\(match.id.uuidString)")
+                        .accessibilityAddTraits(selection.id == match.id ? [.isSelected] : [])
+                    }
+                    .listStyle(.plain)
+                    .onChange(of: selection.id) { _, id in
+                        if let id { proxy.scrollTo(id) }
+                    }
+                }
+            }
+            Divider()
+            HStack {
+                Text(allMatches.count > Self.resultLimit
+                     ? "Showing \(visible.count) of \(allMatches.count) matches · Refine your search to see more."
+                     : "\(allMatches.count) \(allMatches.count == 1 ? "session" : "sessions")")
+                Spacer(minLength: 0)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .padding(10)
         }
-        .frame(width: 460, height: 380)
-        .onAppear { focused = true }
+        .frame(width: 620, height: 460)
+        .onAppear { selection.reconcile(ids, reset: true) }
+        .onChange(of: query) { _, _ in selection.reconcile(ids, reset: true) }
+        .onChange(of: scope) { _, _ in selection.reconcile(ids, reset: true) }
+        .onChange(of: ids) { _, newIDs in selection.reconcile(newIDs) }
         .onExitCommand { dismiss() }
     }
 
     private func pick(_ id: UUID) {
         store.focusSession(id)
         dismiss()
+    }
+}
+
+/// Handle field-editor commands at their native source so arrows select results, not text.
+private struct SessionFinderQueryField: NSViewRepresentable {
+    @Binding var text: String
+    let move: (Int) -> Void
+    let submit: () -> Void
+    let cancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.placeholderString = "Search session, project, title, directory or branch…"
+        field.identifier = NSUserInterfaceItemIdentifier("session-finder-query")
+        field.setAccessibilityIdentifier("session-finder-query")
+        field.font = .systemFont(ofSize: NSFont.systemFontSize + 2)
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.delegate = context.coordinator
+        DispatchQueue.main.async { [weak field] in
+            guard let field else { return }
+            field.window?.makeFirstResponder(field)
+        }
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: SessionFinderQueryField
+        init(_ parent: SessionFinderQueryField) { self.parent = parent }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            switch NSStringFromSelector(commandSelector) {
+            case "moveUp:": parent.move(-1)
+            case "moveDown:": parent.move(1)
+            case "insertNewline:": parent.submit()
+            case "cancelOperation:": parent.cancel()
+            default: return false
+            }
+            return true
+        }
     }
 }
 

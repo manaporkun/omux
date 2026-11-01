@@ -75,7 +75,7 @@ enum PersistenceSmokeChecks {
                     guard host.pane(tabs[2].id)?.dead == true, store.runtime[tabs[2].id]?.exited == true else {
                         throw Failure("Fixture shell death was not observed")
                     }
-                    store.start(tabs[2].id)
+                    store.requestRecovery(tabs[2].id)
                     try await Task.sleep(for: .milliseconds(700))
                     let recovered = Persistence.directory.appendingPathComponent("dead-pane-recovered.txt")
                     guard let replacement = host.pane(tabs[2].id), !replacement.dead,
@@ -98,7 +98,7 @@ enum PersistenceSmokeChecks {
                     guard host.pane(tabs[2].id)?.pid != previous.pids[2], store.runtime[tabs[2].id]?.interrupted == true else {
                         throw Failure("A lost process was not presented as interrupted")
                     }
-                    store.start(tabs[2].id)
+                    store.requestRecovery(tabs[2].id)
                     guard store.runtime[tabs[2].id]?.interrupted == false, !host.needsResume(tabs[2].id) else {
                         throw Failure("Explicit resume did not clear the interrupted state")
                     }

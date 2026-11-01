@@ -320,13 +320,19 @@ struct BranchChip: View {
     @ObservedObject private var changes = Changes.shared
     let tabID: UUID
     let worktree: Worktree
+    var compact = false
+    var location: String?
 
     var body: some View {
-        Button { store.showPanel(.changes) } label: {
+        Button {
+            store.focusSession(tabID)
+            store.showPanel(.changes)
+        } label: {
             HStack(spacing: 5) {
                 Image(systemName: "arrow.triangle.branch")
-                Text(worktree.branch).lineLimit(1)
-                if changes.tabID == tabID, !changes.files.isEmpty {
+                Text(location.map { "\(worktree.branch) · \($0)" } ?? worktree.branch)
+                    .lineLimit(1).truncationMode(.middle)
+                if !compact, changes.tabID == tabID, !changes.files.isEmpty {
                     let totals = changes.files.totals
                     Text("+\(totals.added)").foregroundStyle(.green)
                     Text("−\(totals.removed)").foregroundStyle(.red)
@@ -338,12 +344,13 @@ struct BranchChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .fixedSize()
-        .help("Changes on \(worktree.branch) since \(worktree.base) (⌥⌘2)")
+        .fixedSize(horizontal: !compact, vertical: true)
+        .help("Changes on \(worktree.branch) since \(worktree.base)\nRepository: \((worktree.repo as NSString).expandingTildeInPath)\(location.map { "\nDirectory: \($0)" } ?? "") (⌥⌘2)")
+        .accessibilityLabel("Branch \(worktree.branch), repository \((worktree.repo as NSString).expandingTildeInPath)\(location.map { ", directory \($0)" } ?? ""), show changes")
     }
 }
 
-/// Allow / Deny for Claude Code's permission prompt, without switching to the session.
+/// Inspect a provider's available request details without answering or leaving the session.
 struct PermissionButtons: View {
     @EnvironmentObject var store: Store
     let tabID: UUID
@@ -351,22 +358,124 @@ struct PermissionButtons: View {
     @ViewState private var details = false
 
     var body: some View {
-        let shown = codex.approval(for: tabID)
+        let runtime = store.runtime[tabID] ?? TabRuntime()
+        let provider = runtime.provider ?? store.tab(tabID).map { store.provider(of: $0) }
+        let shown = provider == .codex ? codex.approval(for: tabID) : nil
         HStack(spacing: 6) {
-            if let approval = shown {
-                Button { details.toggle() } label: { Image(systemName: "info.circle") }
-                    .help(approval.detail)
-                    .popover(isPresented: $details) {
-                        ScrollView { Text(approval.detail).font(.system(.body, design: .monospaced)).textSelection(.enabled).padding() }
-                            .frame(width: 420, height: 180)
+            Button { details.toggle() } label: { Image(systemName: "info.circle") }
+                .accessibilityLabel("Inspect approval details")
+                .help("Inspect the full available request, reason, and scope without answering")
+                .popover(isPresented: $details) {
+                    PermissionDetails(tabID: tabID, provider: provider, runtime: runtime, approval: shown,
+                                      actor: shown.flatMap { codex.approvalActor($0, tabID: tabID) }) {
+                        details = false
+                        store.focusSession(tabID)
                     }
+                }
+            if provider != .codex || shown != nil {
+                Button("Allow") { store.answerPermission(tabID, allow: true, codexApproval: shown) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(shown.map { codex.answering.contains($0) || !$0.supportsDecision(allow: true) } ?? false)
+                Button("Deny") { store.answerPermission(tabID, allow: false, codexApproval: shown) }
+                    .buttonStyle(.bordered)
+                    .disabled(shown.map { codex.answering.contains($0) || !$0.supportsDecision(allow: false) } ?? false)
+            } else {
+                Button("Review in terminal") { store.focusSession(tabID) }
+                    .buttonStyle(.bordered)
             }
-            Button("Allow") { store.answerPermission(tabID, allow: true, codexApproval: shown) }
-                .buttonStyle(.borderedProminent)
-            Button("Deny") { store.answerPermission(tabID, allow: false, codexApproval: shown) }
-                .buttonStyle(.bordered)
         }
         .controlSize(.small)
-        .disabled(codex.approval(for: tabID).map { codex.answering.contains($0) } ?? false)
+    }
+}
+
+private struct PermissionDetails: View {
+    @EnvironmentObject var store: Store
+    let tabID: UUID
+    let provider: SessionProvider?
+    let runtime: TabRuntime
+    let approval: CodexApproval?
+    let actor: CodexApprovalActor?
+    let reviewInTerminal: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Approval details").font(.headline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    field("Provider", provider?.label ?? "Not reported")
+                    field("Owning session", store.tab(tabID)?.name ?? tabID.uuidString)
+                    if let approval {
+                        codexDetails(approval)
+                    } else {
+                        field("Request type", runtime.statusKind ?? "Not reported")
+                        field("Reported request", runtime.statusDetail ?? "No request description was provided.")
+                        ForEach(runtime.statusChildren.filter { $0.state == .blocked && $0.kind == "permission" }, id: \.id) { child in
+                            field("Reported child", [child.title, child.id].compactMap { $0 }.joined(separator: "\n"))
+                            if let message = child.message { field("Child request", message) }
+                        }
+                        Text("Only a status summary is available. The full command, reason, scope, and requesting actor may not be reported. Review in terminal before deciding.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Divider()
+            Button("Review in terminal", action: reviewInTerminal)
+                .help("Reveal the owning session without approving or denying")
+        }
+        .padding(16)
+        .frame(width: 480, height: 440)
+    }
+
+    @ViewBuilder
+    private func codexDetails(_ approval: CodexApproval) -> some View {
+        if let actor {
+            field("Root conversation", actor.rootThreadID)
+            if let agent = actor.agent {
+                field("Requesting subagent", agent.name)
+                field("Subagent conversation", agent.id)
+            } else {
+                field("Requesting actor", "Root conversation")
+            }
+        }
+        field("Request type", approval.requestType)
+        field("Protocol method", approval.method)
+        field("Conversation", approval.threadID)
+        field("Turn", approval.turnID)
+        if let item = approval.itemID { field("Item", item) }
+        field("Request ID", requestID(approval.id))
+        if let command = approval.command { field("Command", command) }
+        field("Reason", approval.reason ?? "Not provided by Codex")
+        if let cwd = approval.cwd { field("Working directory", cwd) }
+        if let root = approval.grantRoot {
+            field("Requested session write root", root)
+            Text("Codex reports a requested session write grant. Review its effective scope in terminal.")
+                .foregroundStyle(.secondary)
+        }
+        ForEach(approval.context, id: \.label) { field($0.label, $0.value) }
+        Text("Allow sends accept for this exact request; Deny sends decline. Neither selects a session or policy amendment decision.")
+            .foregroundStyle(.secondary)
+        if approval.needsTerminalReview {
+            Text("The request does not include \(approval.isCommand ? "the command" : "the file contents or diff"). Review in terminal before deciding.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func field(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(.body, design: .monospaced))
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func requestID(_ id: CodexRequestID) -> String {
+        switch id {
+        case .string(let value): return value
+        case .number(let value): return String(value)
+        }
     }
 }

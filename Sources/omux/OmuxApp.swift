@@ -257,10 +257,24 @@ struct ContentView: View {
             Changes.shared.track(tabID: tab?.id, dir: tab.flatMap(store.directory(of:)), worktree: tab?.worktree)
         }
         .sheet(item: $store.newWorktreeGroupID) { WorktreeSheet(groupID: $0).environmentObject(store) }
-        .sheet(isPresented: $store.showQuickSwitcher) { QuickSwitcher().environmentObject(store) }
+        .sheet(item: $store.recoveryRequest, onDismiss: {
+            DispatchQueue.main.async { store.refocusActiveTerminal() }
+        }) { request in
+            SessionRecoveryReview(request: request).environmentObject(store)
+        }
+        .sheet(item: $store.sessionFinderScope, onDismiss: {
+            DispatchQueue.main.async { store.refocusActiveTerminal() }
+        }) { scope in
+            QuickSwitcher(scope: scope).environmentObject(store)
+        }
         .sheet(isPresented: $store.showRecentSessions) { RecentSessionsSheet().environmentObject(store) }
         .sheet(isPresented: $store.showWelcome) { WelcomeSheet().environmentObject(store) }
         .sheet(item: $store.editingTabID) { TabEditSheet(tabID: $0).environmentObject(store) }
+        .sheet(item: $store.sessionDetailsID, onDismiss: {
+            DispatchQueue.main.async { store.refocusActiveTerminal() }
+        }) { id in
+            SessionDetailsSheet(tabID: id).environmentObject(store)
+        }
         .sheet(item: $store.editingGroupID) { GroupEditSheet(groupID: $0).environmentObject(store) }
         .onAppear { AppDelegate.openWindow = openWindow }
     }
@@ -314,11 +328,13 @@ struct SessionHeader: View {
                         .truncationMode(.head)
                 }
                 if rt.busy {
-                    Button { store.stop(tab.id) } label: { Image(systemName: "stop.fill") }
-                        .help("Interrupt (Ctrl-C)")
+                    Button { store.interrupt(tab.id) } label: { Image(systemName: "stop.fill") }
+                        .help(store.interruptionHelp(tab.id))
                 } else if !rt.agentConnected {
-                    Button { store.start(tab.id) } label: { Image(systemName: "play.fill") }
-                        .help("Start or continue this session")
+                    Button { store.requestRecovery(tab.id) } label: { Image(systemName: "play.fill") }
+                        .help(store.recoveryAction(tab.id).explanation)
+                        .accessibilityLabel(store.recoveryAction(tab.id).title)
+                        .disabled(!store.recoveryAction(tab.id).isAvailable)
                 }
             } else {
                 Spacer()
@@ -401,19 +417,24 @@ struct AppCommands: Commands {
                 .disabled(store.commandTargetID == nil)
             Button("Edit Session…") { store.editingTabID = store.commandTargetID }.keyboardShortcut("i")
                 .disabled(store.commandTargetID == nil)
-            Button("Restart Session") { if let id = store.commandTargetID { store.restart(id) } }
+            Button("Restart Session") { if let id = store.commandTargetID { store.requestRestart(id) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(store.commandTargetID == nil)
-            Button("Interrupt (Ctrl-C)") { if let id = store.commandTargetID { store.stop(id) } }
+                .help("End the current process and start the session again. Current work is interrupted.")
+            Button("Interrupt") { if let id = store.commandTargetID { store.interrupt(id) } }
                 .keyboardShortcut(".", modifiers: [.command, .shift])
                 .disabled(store.commandTargetID == nil)
-            Button("Kill Session") { if let id = store.commandTargetID { store.kill(id) } }
+                .help(store.commandTargetID.map { store.interruptionHelp($0) } ?? "Choose a running session to interrupt.")
+            Button("End Session") { if let id = store.commandTargetID { store.kill(id) } }
                 .disabled(store.commandTargetID == nil)
-            Button("Start or Continue Session") { if let id = store.commandTargetID { store.start(id) } }
+                .help("Terminate the agent, shell, and their child processes. Keep this session in the workspace.")
+            Button(store.commandTargetID.map { store.recoveryAction($0).title } ?? "Open Session") {
+                if let id = store.commandTargetID { store.requestRecovery(id) }
+            }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(store.commandTargetID == nil)
+                .disabled(store.commandTargetID.map { !store.recoveryAction($0).isAvailable } ?? true)
             Divider()
-            Button("Jump to Session…") { store.showQuickSwitcher = true }.keyboardShortcut("k")
+            Button("Jump to Session…") { store.openSessionFinder() }.keyboardShortcut("k")
         }
         CommandGroup(replacing: .help) {
             Button("Welcome to omux…") { store.showWelcome = true }

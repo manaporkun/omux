@@ -180,11 +180,13 @@ struct TabRow: View {
             Spacer(minLength: 4)
             if hovering {
                 if rt.busy {
-                    Button { store.stop(tab.id) } label: { Image(systemName: "stop.fill") }
-                        .help("Interrupt (Ctrl-C)")
+                    Button { store.interrupt(tab.id) } label: { Image(systemName: "stop.fill") }
+                        .help(store.interruptionHelp(tab.id))
                 } else if !rt.agentConnected {
-                    Button { store.start(tab.id) } label: { Image(systemName: "play.fill") }
-                        .help("Start or continue this session")
+                    Button { store.requestRecovery(tab.id) } label: { Image(systemName: "play.fill") }
+                        .help(store.recoveryAction(tab.id).explanation)
+                        .accessibilityLabel(store.recoveryAction(tab.id).title)
+                        .disabled(!store.recoveryAction(tab.id).isAvailable)
                 }
             } else if rt.needsAttention {
                 Image(systemName: "bell.fill").font(.caption).foregroundStyle(.orange)
@@ -278,6 +280,7 @@ struct TabMenu: View {
     var body: some View {
         Button("Rename") { store.renamingID = tab.id }
         Button("Edit Session…") { store.editingTabID = tab.id }
+        Button("Session Details…") { store.openSessionDetails(tab.id) }
         Menu("Color") {
             ForEach(TabColor.allCases) { color in
                 Button(color.label) { store.updateTab(tab.id) { $0.color = color } }
@@ -309,9 +312,12 @@ struct TabMenu: View {
             }
         }
         Divider()
-        Button("Interrupt (Ctrl-C)") { store.stop(tab.id) }
-        Button("Restart Session") { store.restart(tab.id) }
-        Button("Kill Session") { store.kill(tab.id) }
+        Button("Interrupt") { store.interrupt(tab.id) }
+            .help(store.interruptionHelp(tab.id))
+        Button("Restart Session") { store.requestRestart(tab.id) }
+            .help("End the current process and start the session again. Current work is interrupted.")
+        Button("End Session") { store.kill(tab.id) }
+            .help("Terminate the agent, shell, and their child processes. Keep this session in the workspace.")
         Button("Close Session", role: .destructive) { store.requestClose(tab.id) }
     }
 }

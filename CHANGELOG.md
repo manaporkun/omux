@@ -16,9 +16,39 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 - Session commands identify their visible active target and disable for hidden/minimized selections.
   Notification suppression and unread acknowledgment require actual terminal engagement; blocked,
   error, and interrupted attention remain until resolved.
+- Card headers expose drag-to-swap with a grip, open-hand cursor, gesture help, and an explicit
+  release-to-swap target cue. Native smoke checks cover filtered/shelved ordering, keyboard-target
+  and process preservation, project switching, and saved order.
+- Filter counts explicitly include shelf matches. The shelf shows total/matching counts and matching
+  chips; Restore matching leaves unrelated sessions minimized and preserves the selected filter.
+  Interrupted sessions now match Needs you, not Idle.
+- The sidebar exposes Jump to session (⌘K), distinct from project search (⌘P). The existing finder
+  matches effective directories and worktree branches, supports bounded keyboard selection and
+  attention-only scope, and shows total counts/refinement guidance when results exceed 15.
+- Projects with more than eight sessions show readable count summaries instead of unbounded dots,
+  with textual accessibility labels and space reserved for project identity.
+- Needs you now shows a total and at most four reason-labeled previews. View all opens the existing
+  attention-scoped finder, including shelved sessions across projects, without resolving their
+  underlying blocked/error/interrupted state.
+- Grid cards show compact branch/location context with full-path help, plus relevant PR and
+  subagent access. The existing folder-path preference is reused; actions target the owning card.
+- Session Details exposes verified per-session quit survival, retained direct-mode fallback reasons,
+  unstarted/ended/interrupted/unverifiable states, and Settings/Help routes. It explicitly distinguishes
+  app quit from reboot and does not derive a running session's mode from the current preference.
+- Interrupt now sends one Ctrl-C for shell/Claude instead of an automatic exit sequence. Codex uses
+  protocol turn interruption and explains startup/idle/unavailable cases without terminating a session.
+  End Session and Restart remain separate actions with explicit consequences.
+- Approval inspection is available for both providers, with full available details and honest
+  unknown actor/scope handling. Codex retains request-bound duplicate protection and only exposes
+  supported accept/decline decisions; terminal review never answers the request.
+- Recovery distinguishes surviving-process reconnection, saved-conversation reopening, and reviewed
+  command replay. Launch summaries link affected sessions without inferring mid-task work. Custom
+  replay/Restart previews the exact command/directory and rejects stale confirmation.
 
 ### Fixed
 
+- Closing the session finder restores keyboard focus to its selected terminal rather than leaving
+  the previous terminal as the native responder.
 - Start and Restart can recover an owned tmux pane after its process dies, including when tmux
   retains the pane without a PID. Dead panes remain visible to health checks and targeted cleanup;
   ownership checks still reject foreign sessions.

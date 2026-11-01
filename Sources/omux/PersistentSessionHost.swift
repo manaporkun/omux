@@ -1,6 +1,29 @@
 import CryptoKit
 import Foundation
 
+/// Captured when a direct shell is launched, not re-derived from later preferences.
+enum DirectSessionReason: Equatable {
+    case disabled, tmuxUnavailable, relayUnavailable
+
+    var prerequisiteExplanation: String {
+        switch self {
+        case .disabled: return "Persistence is currently turned off in Session Settings."
+        case .tmuxUnavailable: return "tmux is unavailable. Install tmux and reopen omux to enable persistent hosting."
+        case .relayUnavailable: return "The bundled session relay is missing or not executable. Reinstall or rebuild omux to enable persistent hosting."
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .disabled:
+            return "Persistence was turned off when this session started. Changing Settings does not move this running process into the session host."
+        case .tmuxUnavailable:
+            return "tmux was unavailable when this session started, so it opened as a direct shell. Install tmux and reopen omux before starting a persistent session."
+        case .relayUnavailable:
+            return "The bundled session relay was missing or not executable when this session started, so it opened as a direct shell. Reinstall or rebuild omux, then restart the session."
+        }
+    }
+}
+
 /// Owns one isolated tmux server per workspace. Never operates on the user's tmux server.
 @MainActor
 final class PersistentSessionHost {
@@ -46,7 +69,13 @@ final class PersistentSessionHost {
     }
 
     var requested: Bool { UserDefaults.standard.object(forKey: Prefs.persistentSessions) as? Bool ?? true }
-    var enabled: Bool { requested && binary != nil && FileManager.default.isExecutableFile(atPath: relay) }
+    var prerequisiteIssue: DirectSessionReason? {
+        if binary == nil { return .tmuxUnavailable }
+        if !FileManager.default.isExecutableFile(atPath: relay) { return .relayUnavailable }
+        return nil
+    }
+    var directSessionReason: DirectSessionReason? { requested ? prerequisiteIssue : .disabled }
+    var enabled: Bool { directSessionReason == nil }
     func name(_ id: UUID, server: Bool = false) -> String { (server ? "omux-codex-" : "omux-") + id.uuidString.lowercased() }
     // Resolve exact names in Swift; use tmux's stable $session IDs for every operation.
     // Some tmux session-only commands interpret the '=' prefix literally.
@@ -171,9 +200,12 @@ final class PersistentSessionHost {
         guard pipe.ok else { throw HostError.command(pipe.out) }
     }
 
-    func panes() -> [UUID: Pane] {
+    func panes() -> [UUID: Pane] { paneSnapshot() ?? [:] }
+
+    /// nil means the host query failed; an empty dictionary means it succeeded with no owned panes.
+    func paneSnapshot() -> [UUID: Pane]? {
         let result = run(["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}\t#{pane_dead}\t#{@omux-id}\t#{pane_current_path}"])
-        guard result.ok else { return [:] }
+        guard result.ok else { return nil }
         var panes: [UUID: Pane] = [:]
         for line in result.out.split(separator: "\n") {
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)

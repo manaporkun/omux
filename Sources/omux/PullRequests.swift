@@ -315,18 +315,23 @@ struct PullRequestBadge: View {
 
 /// "#42 · Checks failing" in the header strip; opens the pull request's checks.
 struct PullRequestChip: View {
+    @EnvironmentObject var store: Store
     @ObservedObject private var monitor = PullRequestMonitor.shared
     let tabID: UUID
+    var compact = false
     @ViewState private var open = false
 
     var body: some View {
         if let pr = monitor.requests[tabID] {
-            Button { open.toggle() } label: {
+            Button {
+                store.focusSession(tabID)
+                open.toggle()
+            } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.triangle.pull")
                     Text("#\(pr.number)")
                     Circle().fill(pr.color).frame(width: 6, height: 6)
-                    Text(pr.summary)
+                    if !compact { Text(pr.summary) }
                 }
                 .padding(.horizontal, 7)
                 .frame(height: 18)
@@ -336,7 +341,8 @@ struct PullRequestChip: View {
             }
             .buttonStyle(.plain)
             .fixedSize()
-            .help("Pull request #\(pr.number): \(pr.title)")
+            .help("Pull request #\(pr.number): \(pr.title) · \(pr.summary)")
+            .accessibilityLabel("Pull request #\(pr.number), \(pr.summary), \(pr.title)")
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 PullRequestDetails(pr: pr, tabID: tabID) { open = false }
             }

@@ -5,6 +5,7 @@ struct CodexAgents: View {
     @ObservedObject private var manager = CodexManager.shared
     let tabID: UUID
     var compact = false
+    var countOnly = false
     @ViewState private var open = false
 
     private var agents: [CodexAgent] { manager.agents[tabID] ?? [] }
@@ -12,9 +13,18 @@ struct CodexAgents: View {
     var body: some View {
         if !agents.isEmpty {
             if compact {
-                Button { open.toggle() } label: {
-                    Label("\(agents.filter { !$0.finished }.count) agents", systemImage: "person.2")
+                Button {
+                    store.focusSession(tabID)
+                    open.toggle()
+                } label: {
+                    Label(countOnly ? "\(agents.count)" : "\(agents.filter { !$0.finished }.count) agents", systemImage: "person.2")
+                        .padding(.horizontal, countOnly ? 7 : 0)
+                        .frame(height: 18)
+                        .overlay(Capsule().strokeBorder(.primary.opacity(countOnly ? 0.15 : 0)))
                 }
+                .fixedSize()
+                .help("\(agents.count) subagents · \(agents.filter { !$0.finished }.count) running")
+                .accessibilityLabel("\(agents.count) subagents, \(agents.filter { !$0.finished }.count) running")
                 .popover(isPresented: $open) { rows.padding(10).frame(width: 320) }
             } else { rows }
         }
@@ -24,6 +34,7 @@ struct CodexAgents: View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(agents) { agent in
                 Button {
+                    store.focusSession(tabID)
                     store.openAgent = nil
                     store.openCodexAgent = CodexAgentRef(tabID: tabID, agent: agent)
                     store.showPanel(.files)

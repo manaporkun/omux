@@ -6,7 +6,31 @@ struct CodexApproval: Hashable, Identifiable {
     let threadID: String
     let turnID: String
     let method: String
-    let detail: String
+    let command: String?
+    let reason: String?
+    let cwd: String?
+    let grantRoot: String?
+    let itemID: String?
+    let kind: String?
+    let context: [ContextField]
+    private let availableDecisions: [String]?
+
+    struct ContextField: Hashable {
+        let label: String
+        let value: String
+    }
+
+    var isCommand: Bool { method == "item/commandExecution/requestApproval" }
+    var requestType: String {
+        isCommand ? (kind == "writeStdin" ? "Terminal input" : "Command execution") : "File changes"
+    }
+    /// A short status summary, not a replacement for inspection of all request fields.
+    var detail: String { command ?? reason ?? (isCommand ? "Review command in Codex" : "Review file changes in Codex") }
+    var needsTerminalReview: Bool { !isCommand || command?.isEmpty != false }
+
+    func supportsDecision(allow: Bool) -> Bool {
+        availableDecisions?.contains(allow ? "accept" : "decline") ?? true
+    }
 
     init?(message: [String: Any]) {
         guard let method = message["method"] as? String,
@@ -16,7 +40,31 @@ struct CodexApproval: Hashable, Identifiable {
               let thread = params["threadId"] as? String,
               let turn = params["turnId"] as? String else { return nil }
         self.id = id; threadID = thread; turnID = turn; self.method = method
-        detail = params["command"] as? String ?? params["reason"] as? String ?? "Approve file changes in Codex"
+        command = params["command"] as? String
+        reason = params["reason"] as? String
+        cwd = params["cwd"] as? String
+        grantRoot = params["grantRoot"] as? String
+        itemID = params["itemId"] as? String
+        kind = params["kind"] as? String
+        availableDecisions = (params["availableDecisions"] as? [Any])?.compactMap { $0 as? String }
+        context = [
+            ("additionalPermissions", "Requested additional permissions"),
+            ("networkApprovalContext", "Network approval context"),
+            ("proposedExecpolicyAmendment", "Proposed command policy"),
+            ("proposedNetworkPolicyAmendments", "Proposed network policies"),
+            ("availableDecisions", "Available decisions"),
+            ("commandActions", "Parsed command actions"),
+            ("environmentId", "Environment"),
+            ("approvalId", "Approval callback"),
+            ("kind", "Action kind")
+        ].compactMap { key, label in
+            guard let value = params[key], !(value is NSNull) else { return nil }
+            if let text = value as? String { return ContextField(label: label, value: text) }
+            guard JSONSerialization.isValidJSONObject(value),
+                  let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+                  let text = String(data: data, encoding: .utf8) else { return nil }
+            return ContextField(label: label, value: text)
+        }
     }
 }
 
@@ -120,6 +168,23 @@ final class CodexManager: ObservableObject {
     func thread(for tabID: UUID) -> String? { threads[tabID] }
     func isConnected(_ tabID: UUID) -> Bool { connections[tabID]?.isReady == true }
 
+    /// Only a live, subscribed turn can be interrupted. Idle detach remains a no-op.
+    func interruptionUnavailableReason(_ tabID: UUID) -> String? {
+        guard let root = threads[tabID] else { return "Codex has no registered conversation to interrupt." }
+        guard isConnected(tabID) else { return "Codex is disconnected; reconnect before interrupting its turn." }
+        let active = turns[root] != nil || (agents[tabID] ?? []).contains { turns[$0.id] != nil }
+        return active ? nil : "Codex has no active turn to interrupt."
+    }
+
+    /// Resolve identity through the same ownership maps that route approvals, never request-supplied actor labels.
+    func approvalActor(_ approval: CodexApproval, tabID: UUID) -> CodexApprovalActor? {
+        guard let root = threads[tabID] else { return nil }
+        if approval.threadID == root { return CodexApprovalActor(rootThreadID: root, agent: nil) }
+        guard agentOwners[approval.threadID] == tabID,
+              let agent = agents[tabID]?.first(where: { $0.id == approval.threadID }) else { return nil }
+        return CodexApprovalActor(rootThreadID: root, agent: agent)
+    }
+
     func approval(for tabID: UUID) -> CodexApproval? {
         if let root = threads[tabID], let approval = approvals[root]?.first { return approval }
         return (agents[tabID] ?? []).compactMap { approvals[$0.id]?.first }.first
@@ -129,6 +194,9 @@ final class CodexManager: ObservableObject {
     /// next one moves up, and a second click (a double-click) must not accept that unseen.
     func answer(_ approval: CodexApproval, tabID: UUID, allow: Bool) async throws {
         guard self.approval(for: tabID) == approval, !answering.contains(approval) else { return }
+        guard approval.supportsDecision(allow: allow) else {
+            throw CodexError.server("This decision is not available for this request. Review in terminal.")
+        }
         answering.insert(approval)
         defer { answering.remove(approval) }
         try await connection(for: tabID).respond(to: approval.id, result: ["decision": allow ? "accept" : "decline"])
@@ -420,6 +488,11 @@ final class CodexManager: ObservableObject {
         }
         agents[owner] = list
     }
+}
+
+struct CodexApprovalActor {
+    let rootThreadID: String
+    let agent: CodexAgent?
 }
 
 struct CodexAgent: Identifiable, Equatable {
