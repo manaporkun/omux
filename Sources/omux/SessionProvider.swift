@@ -21,15 +21,6 @@ enum SessionProvider: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Whether omux may start this agent on its own in `directory`. An agent started in the
-    /// home folder takes all of it as its project and reads Downloads, Documents, Pictures and
-    /// Music, so macOS asks the user, in omux's name, for access to each of them.
-    func startsAutomatically(in directory: String, home: String = NSHomeDirectory()) -> Bool {
-        guard self == .claude || self == .codex else { return true }
-        func normalized(_ path: String) -> String { ((path as NSString).expandingTildeInPath as NSString).standardizingPath }
-        return normalized(directory) != normalized(home)
-    }
-
     /// Existing custom commands keep their exact text. Only the standard Codex
     /// command opts into managed Codex sessions; wrappers remain ordinary commands.
     static func infer(command: String?) -> SessionProvider {

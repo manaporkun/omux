@@ -40,6 +40,23 @@ cp Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" -c "Set :CFBundleName $NAME" \
   -c "Set :NSServices:0:NSMenuItem:default Open in $NAME" -c "Set :NSServices:0:NSPortName $NAME" "$APP/Contents/Info.plist"
 cp Resources/omux.icns "$APP/Contents/Resources/"
+# The light/dark Liquid Glass icon for macOS 26, compiled from Icon Composer's omux.icon into
+# Assets.car. CFBundleIconName makes macOS 26 use it; older macOS keeps using omux.icns. Without
+# Xcode 26's actool the build goes on with omux.icns alone.
+# Absolute paths: actool hands the work to a helper process that resolves relative paths against
+# its own working directory, not this script's.
+ICON_OUT="$PWD/build/icon"
+rm -rf "$ICON_OUT"; mkdir -p "$ICON_OUT"
+if [[ -d Resources/omux.icon ]] && xcrun actool "$PWD/Resources/omux.icon" --compile "$ICON_OUT" \
+     --platform macosx --minimum-deployment-target 14.0 --app-icon omux \
+     --output-partial-info-plist "$ICON_OUT/partial.plist" >/dev/null 2>&1 \
+   && [[ -f "$ICON_OUT/Assets.car" ]]; then
+  cp "$ICON_OUT/Assets.car" "$APP/Contents/Resources/"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string omux" "$APP/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName omux" "$APP/Contents/Info.plist"
+else
+  echo "warning: could not compile Resources/omux.icon (needs Xcode 26); using omux.icns only" >&2
+fi
 for bundle in .build/release/*.bundle; do
   [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"
 done

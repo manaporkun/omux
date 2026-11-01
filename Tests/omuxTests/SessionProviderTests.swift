@@ -62,24 +62,4 @@ final class SessionProviderTests: XCTestCase {
             XCTAssertEqual(SessionProvider.claudeCommand(raw, sessionID: UUID(), conversationExists: false), raw)
         }
     }
-
-    func testAgentsDoNotStartOnTheirOwnInTheHomeFolder() {
-        let home = "/Users/me"
-        for provider in [SessionProvider.claude, .codex] {
-            XCTAssertFalse(provider.startsAutomatically(in: "/Users/me", home: home))
-            XCTAssertFalse(provider.startsAutomatically(in: "/Users/me/", home: home))
-            XCTAssertFalse(provider.startsAutomatically(in: "/Users/me/app/..", home: home))
-            XCTAssertTrue(provider.startsAutomatically(in: "/Users/me/app", home: home))
-        }
-    }
-
-    func testTildeMeansTheHomeFolder() {
-        XCTAssertFalse(SessionProvider.claude.startsAutomatically(in: "~"))
-        XCTAssertTrue(SessionProvider.claude.startsAutomatically(in: "~/app"))
-    }
-
-    func testShellsAndCustomCommandsStillStartInTheHomeFolder() {
-        XCTAssertTrue(SessionProvider.shell.startsAutomatically(in: "/Users/me", home: "/Users/me"))
-        XCTAssertTrue(SessionProvider.custom.startsAutomatically(in: "/Users/me", home: "/Users/me"))
-    }
 }

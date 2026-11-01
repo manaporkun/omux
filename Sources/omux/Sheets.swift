@@ -110,9 +110,6 @@ struct TabEditSheet: View {
                 TextField("Folder", text: $directory, prompt: Text(group?.directory ?? "~"))
                 Button("Choose…") { if let dir = chooseDirectory(current: directory) { directory = dir } }
             }
-            if !provider.startsAutomatically(in: directory.isEmpty ? group?.directory ?? "~" : directory) {
-                HomeFolderHint(provider: provider)
-            }
             Picker("Command", selection: $mode) {
                 ForEach(CommandMode.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -210,18 +207,15 @@ struct GroupEditSheet: View {
                 TextField("Folder", text: $directory, prompt: Text("~"))
                 Button("Choose…") { if let dir = chooseDirectory(current: directory) { directory = dir } }
             }
-            if !provider.startsAutomatically(in: directory.isEmpty ? "~" : directory) {
-                HomeFolderHint(provider: provider)
-            }
-            Picker("New sessions", selection: $provider) {
+            Picker("Agent for Start", selection: $provider) {
                 ForEach(SessionProvider.allCases) { Text($0.label).tag($0) }
             }
             if provider == .custom {
                 TextField("Command", text: $command)
             }
-            Text("Applies when a session starts. Existing sessions keep running.")
+            Text("New sessions open as shells. Use Start or an explicit agent action to run this command; existing sessions keep running.")
                 .font(.caption).foregroundStyle(.secondary)
-            Toggle("Give new sessions their own Git worktree", isOn: $useWorktrees)
+            Toggle("Give new agent sessions their own Git worktree", isOn: $useWorktrees)
             TextField("Worktree setup", text: $worktreeSetup, prompt: Text("cp \"$OMUX_REPO/.env\" . && npm install"))
                 .font(.system(.body, design: .monospaced))
             Text(WorktreeSetupHint.text)
@@ -396,13 +390,3 @@ struct RecentSessionsSheet: View {
     }
 }
 
-/// Shown when an agent would open in the home folder, where omux doesn't start it.
-private struct HomeFolderHint: View {
-    let provider: SessionProvider
-
-    var body: some View {
-        Text("Choose a project folder. In your home folder \(provider.label) doesn't start on its own: it would read Downloads, Documents, Pictures and Music, and macOS would ask you about each.")
-            .font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}

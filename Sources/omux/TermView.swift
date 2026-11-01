@@ -57,7 +57,7 @@ private final class ProcessEvents: LocalProcessTerminalViewDelegate {
 final class TermView: LocalProcessTerminalView {
     let tabID: UUID
     var onEvent: ((TermEvent) -> Void)?
-    var onFocus: (() -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
     private let events = ProcessEvents()
     private var oscObservation: TerminalOscObservation?
 
@@ -83,8 +83,20 @@ final class TermView: LocalProcessTerminalView {
 
     required init?(coder: NSCoder) { fatalError("not supported") }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // SwiftTerm's responder methods are public, not open. Its open focus property
+    // is updated by those methods and when the terminal moves between hosts.
+    override var hasFocus: Bool {
+        get { super.hasFocus }
+        set {
+            super.hasFocus = newValue
+            onFocusChange?(newValue)
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
-        onFocus?()
+        window?.makeFirstResponder(self)
         super.mouseDown(with: event)
     }
 
@@ -330,7 +342,8 @@ struct TerminalHost: NSViewRepresentable {
             guard focusRequested, window != nil else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.focusRequested, let terminal = self.terminal,
-                      terminal.superview === self, let window = self.window, window.attachedSheet == nil else { return }
+                      terminal.superview === self, let window = self.window, window.attachedSheet == nil,
+                      Store.shared.commandTargetID == terminal.tabID else { return }
                 if window.makeFirstResponder(terminal) { self.focusRequested = false }
             }
         }

@@ -34,14 +34,15 @@ fixture = {
 }
 (data / "workspace.json").write_text(json.dumps(fixture))
 try:
-    subprocess.run(["sh", "scripts/preview-workspace.sh", str(app)], cwd=repo, check=True)
+    subprocess.run(["sh", "scripts/preview-workspace.sh"], cwd=repo, check=True)
+    shutil.copytree(repo / "build/omux Dev.app", app, symlinks=True)
     info_path = app / "Contents/Info.plist"
     info = plistlib.loads(info_path.read_bytes())
     info.update(CFBundleIdentifier=bundle_id, CFBundleName="omux Persistence Checks",
                 CFBundleDisplayName="omux Persistence Checks")
     info_path.write_bytes(plistlib.dumps(info))
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
-    for key, value in [("autoResume", "true"), ("persistentSessions", "true"),
+    for key, value in [("persistentSessions", "true"),
                        ("welcomed", "true"), ("confirmQuit", "false")]:
         subprocess.run(["defaults", "write", bundle_id, key, "-bool", value], check=True)
     for phase in (1, 2, 3):

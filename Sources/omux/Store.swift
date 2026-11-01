@@ -11,23 +11,34 @@ final class Store: ObservableObject {
     static let shared = Store()
 
     @Published var groups: [TabGroup]
-    @Published var canvas: CanvasWorkspace
+    @Published var canvas: CanvasWorkspace {
+        didSet {
+            if let id = activeTerminalID, !isSessionVisible(id) { deactivateTerminal() }
+        }
+    }
     @Published var selectedTabID: UUID? {
         didSet {
-            // Deferred: this fires inside the List's selection update.
+            // Retained selection is metadata, not evidence that a terminal was engaged.
+            if activeTerminalID != selectedTabID { deactivateTerminal() }
             guard let id = selectedTabID else { return }
             if let group = group(containing: id), canvas.projectID != group.id { canvas.projectID = group.id }
-            if canvas.maximizedID != nil { canvas.maximizedID = id }
-            DispatchQueue.main.async { [weak self] in
-                self?.clearAttention(id)
-                self?.refreshBusy(id)
-            }
+            DispatchQueue.main.async { [weak self] in self?.refreshBusy(id) }
+        }
+    }
+    /// Explicitly selected, visible session; never restored from persistence.
+    @Published private(set) var activeTerminalID: UUID?
+    /// The terminal that actually became first responder, independent of retained selection.
+    @Published private(set) var engagedTerminalID: UUID?
+    @Published var canvasFilter: CanvasFilter = .all {
+        didSet {
+            if let id = activeTerminalID, !isSessionVisible(id) { deactivateTerminal() }
         }
     }
     @Published private(set) var runtime: [UUID: TabRuntime] = [:] {
         didSet {
             let count = runtime.values.filter(\.needsAttention).count
             NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+            if let id = activeTerminalID, !isSessionVisible(id) { deactivateTerminal() }
         }
     }
     @Published var renamingID: UUID?
@@ -106,9 +117,12 @@ final class Store: ObservableObject {
             .sink { [weak self] _ in self?.save() }
             .store(in: &cancellables)
 
-        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            DispatchQueue.main.async {
-                if let id = Store.shared.selectedTabID { Store.shared.clearAttention(id) }
+        for name in [NSApplication.didBecomeActiveNotification, NSWindow.didBecomeKeyNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                DispatchQueue.main.async {
+                    let store = Store.shared
+                    if let id = store.engagedTerminalID, store.isWatching(id) { store.clearAttention(id) }
+                }
             }
         }
 
@@ -133,17 +147,13 @@ final class Store: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.showWelcome = true }
             }
         }
-        if UserDefaults.standard.bool(forKey: Prefs.autoResume) {
-            startAllSessions()
-        } else {
-            // Restored tabs stay dormant until selected (shell) or played (claude).
-            let running = sessionHost.panes()
-            for entry in allTabs {
-                let interrupted = sessionHost.hasRecord(entry.tab.id) && running[entry.tab.id]?.dead != false
-                runtime[entry.tab.id] = TabRuntime(exited: true, interrupted: interrupted)
-            }
-            startAllSessions(existingOnly: true)
+        // Restore connections, never agent processes. Missing sessions open as shells when shown.
+        let running = sessionHost.panes()
+        for entry in allTabs {
+            let interrupted = sessionHost.hasRecord(entry.tab.id) && running[entry.tab.id]?.dead != false
+            runtime[entry.tab.id] = TabRuntime(exited: true, interrupted: interrupted)
         }
+        reconnectSessions(running)
         hostTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshHostedSessions() }
         }
@@ -189,17 +199,15 @@ final class Store: ObservableObject {
 
     // MARK: Terminal lifecycle
 
-    /// The live view for a tab; a dormant tab gets a plain shell (no claude) on first show.
+    /// Materializing a card only attaches its existing session or opens a usable plain shell.
     func terminal(for tabID: UUID) -> TermView? {
         if let view = terminals[tabID] { return view }
         guard let loc = location(of: tabID) else { return nil }
-        return makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group],
-                            command: UserDefaults.standard.bool(forKey: Prefs.autoResume) ? nil : "")
+        return makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group])
     }
 
-    private func startAllSessions(existingOnly: Bool = false) {
-        let existing = existingOnly ? sessionHost.panes() : [:]
-        let all = existingOnly ? allTabs.filter { existing[$0.tab.id] != nil } : allTabs
+    private func reconnectSessions(_ existing: [UUID: PersistentSessionHost.Pane]) {
+        let all = allTabs.filter { existing[$0.tab.id]?.dead == false }
         let ordered = all.filter { $0.tab.id == selectedTabID } + all.filter { $0.tab.id != selectedTabID }
         var delay: TimeInterval = 0
         for entry in ordered {
@@ -213,23 +221,23 @@ final class Store: ObservableObject {
     }
 
     @discardableResult
-    private func makeTerminal(tab: TabItem, group: TabGroup, command: String? = nil) -> TermView {
+    private func makeTerminal(tab: TabItem, group: TabGroup, command: String? = nil, startProvider: Bool = false) -> TermView {
         let view = TermView(tabID: tab.id)
         terminals[tab.id] = view
-        view.onFocus = { [weak self] in
-            guard let self, self.selectedTabID != tab.id else { return }
-            self.selectedTabID = tab.id
+        view.onFocusChange = { [weak self, weak view] engaged in
+            guard let self, let view, self.terminals[tab.id] === view else { return }
+            self.terminalFocusChanged(tab.id, engaged: engaged)
         }
         // A replaced view (restart) still reports its exit; only the current one may update the tab.
         view.onEvent = { [weak self, weak view] event in
             guard let self, let view, self.terminals[tab.id] === view else { return }
             self.handle(event, for: tab.id)
         }
-        launch(view, tab: tab, group: group, command: command)
+        launch(view, tab: tab, group: group, command: command, startProvider: startProvider)
         return view
     }
 
-    private func launch(_ view: TermView, tab: TabItem, group: TabGroup, command: String?) {
+    private func launch(_ view: TermView, tab: TabItem, group: TabGroup, command: String?, startProvider: Bool) {
         let home = NSHomeDirectory()
         var dir = ((tab.directory ?? group.directory) as NSString?)?.expandingTildeInPath ?? home
         var isDir: ObjCBool = false
@@ -270,7 +278,7 @@ final class Store: ObservableObject {
                     if !history.isEmpty { view.feed(text: history.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n") }
                 }
                 view.startProcess(executable: sessionHost.binary!,
-                                  args: sessionHost.arguments + ["attach-session", "-t", sessionHost.target(tab.id)],
+                                  args: sessionHost.arguments + ["attach-session", "-t", try sessionHost.target(tab.id)],
                                   environment: env.map { "\($0.key)=\($0.value)" }, currentDirectory: dir)
             } else {
                 attachment = nil
@@ -293,20 +301,19 @@ final class Store: ObservableObject {
             $0.interrupted = attachment?.needsResume == true
         }
         if attachment != nil { watchHostedSession(tab.id, view: view) }
-        if attachment?.needsResume == true { return }
-        if attachment?.reused == true {
+        if attachment?.needsResume == true, !startProvider { return }
+        if attachment?.reused == true, attachment?.needsResume != true {
             if provider == .codex { startCodex(view, tab: tab, cwd: dir, reattach: true) }
             else { refreshBusy(tab.id) }
             return // Never type a second startup command into an existing session.
         }
 
-        // A tab without a project folder (or whose folder is gone) opens in the home folder;
-        // there the agent waits until the user starts it.
-        if command == nil, !provider.startsAutomatically(in: dir, home: home) {
-            Notices.shared.post("\(provider.label) didn't start in \(tab.name)",
-                                detail: "The session has no project folder, so it opened in your home folder. Set one with Edit Session… or Edit Project…, or start \(provider.label) yourself.",
-                                isError: true)
-            return
+        // Attaching is independent from permission to start a provider. In particular, a
+        // vanished/dead persistent pane may have just been replaced with a shell above.
+        guard startProvider else { return }
+        if attachment?.needsResume == true {
+            try? sessionHost.setNeedsResume(false, id: tab.id)
+            update(tab.id) { $0.interrupted = false }
         }
 
         if provider == .codex, command == nil {
@@ -314,8 +321,10 @@ final class Store: ObservableObject {
         } else if let command = command ?? startupCommand(tab: tab, group: group), !command.isEmpty {
             let token = UUID()
             pendingCommands[tab.id] = token
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                if self?.pendingCommands[tab.id] == token { self?.pendingCommands[tab.id] = nil }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak view] in
+                guard let self, let view, self.terminals[tab.id] === view,
+                      self.pendingCommands[tab.id] == token else { return }
+                self.pendingCommands[tab.id] = nil
                 view.send(txt: command + "\n")
             }
         }
@@ -357,6 +366,7 @@ final class Store: ObservableObject {
 
     /// Kills the shell and everything it spawned (claude, node, …), not just the shell.
     private func killTree(_ view: TermView) {
+        pendingCommands[view.tabID] = nil
         if hostedSessions.remove(view.tabID) != nil {
             sessionWatches.removeValue(forKey: view.tabID)?.cancel()
             statusVersions[view.tabID] = nil; queryVersions[view.tabID] = nil
@@ -490,6 +500,7 @@ final class Store: ObservableObject {
     /// Starts the selected provider in an idle shell or resumes its exact saved chat.
     func start(_ id: UUID) {
         guard let loc = location(of: id), pendingCommands[id] == nil else { return }
+        focusSession(id)
         let tab = groups[loc.group].tabs[loc.tab]
         if runtime[id]?.exited == true, let pane = sessionHost.pane(id), !pane.dead {
             sessionWatches.removeValue(forKey: id)?.cancel()
@@ -527,26 +538,26 @@ final class Store: ObservableObject {
             }
             return
         }
-        let session = tab.claudeSessionID.uuidString.lowercased()
-        let command = startupCommand(tab: tab, group: groups[loc.group]) ?? "claude --session-id \(session)"
+        guard let command = startupCommand(tab: tab, group: groups[loc.group]) else { return }
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
             guard !(runtime[id]?.busy ?? false) else { return }
             view.send(txt: command + "\n")
         } else {
             terminals.removeValue(forKey: id)?.removeFromSuperview()
-            makeTerminal(tab: tab, group: groups[loc.group], command: command)
+            makeTerminal(tab: tab, group: groups[loc.group], command: command, startProvider: true)
             objectWillChange.send()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.refreshBusy(id) }
     }
 
-    /// Resolves the tab's command and, for `claude`, pins it to the tab's session id so the
-    /// conversation resumes on relaunch.
+    /// Resolves an explicitly requested command and pins Claude to this tab's saved chat.
     func startupCommand(tab: TabItem, group: TabGroup) -> String? {
-        let raw = (tab.command ?? group.command ?? "").trimmingCharacters(in: .whitespaces)
-        if tab.resolvedProvider(in: group) == .shell { return nil }
+        let provider = tab.resolvedProvider(in: group)
+        guard provider != .shell else { return nil }
+        var raw = (tab.command ?? group.command ?? provider.command).trimmingCharacters(in: .whitespaces)
+        if raw.isEmpty, provider == .claude { raw = provider.command }
         guard !raw.isEmpty else { return nil }
-        guard tab.resolvedProvider(in: group) == .claude else { return raw }
+        guard provider == .claude else { return raw }
         let session = tab.claudeSessionID.uuidString.lowercased()
         return SessionProvider.claudeCommand(raw, sessionID: tab.claudeSessionID, conversationExists: Self.claudeSessionExists(session))
     }
@@ -565,7 +576,7 @@ final class Store: ObservableObject {
         return directory.map(normalized) == normalized(path)
     }
 
-    /// Opens a folder as a new group with one Claude session inside it.
+    /// Opens a folder as a new project with a shell; its agent waits for Start.
     func openFolder(_ path: String) {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return }
@@ -576,13 +587,13 @@ final class Store: ObservableObject {
         let group = TabGroup(name: (path as NSString).lastPathComponent, directory: path, tabs: [TabItem(name: "Session 1")])
         groups.append(group)
         makeTerminal(tab: group.tabs[0], group: group)
-        selectedTabID = group.tabs[0].id
+        focusSession(group.tabs[0].id)
     }
 
     /// Opens an existing Claude conversation as a session in the project for its folder.
     func openClaudeSession(_ recent: RecentSession) {
         if let existing = allTabs.first(where: { $0.tab.claudeSessionID == recent.id && provider(of: $0.tab) == .claude }) {
-            selectedTabID = existing.tab.id
+            start(existing.tab.id)
             return
         }
         let gi: Int
@@ -598,13 +609,13 @@ final class Store: ObservableObject {
         tab.claudeSessionID = recent.id
         groups[gi].tabs.append(tab)
         groups[gi].isCollapsed = false
-        makeTerminal(tab: tab, group: groups[gi])
-        selectedTabID = tab.id
+        makeTerminal(tab: tab, group: groups[gi], startProvider: true)
+        focusSession(tab.id)
     }
 
     func openCodexSession(_ recent: CodexConversation) {
         if let existing = allTabs.first(where: { $0.tab.codexThreadID == recent.id && provider(of: $0.tab) == .codex }) {
-            selectedTabID = existing.tab.id
+            start(existing.tab.id)
             return
         }
         let groupID: UUID
@@ -709,7 +720,11 @@ final class Store: ObservableObject {
     }
 
     private func isWatching(_ id: UUID) -> Bool {
-        selectedTabID == id && NSApp.isActive && NSApp.keyWindow != nil
+        guard engagedTerminalID == id, isSessionVisible(id), NSApp.isActive,
+              let terminal = terminals[id], let window = terminal.window,
+              !terminal.isHiddenOrHasHiddenAncestor, !terminal.visibleRect.isEmpty,
+              window.isKeyWindow, window.attachedSheet == nil else { return false }
+        return window.firstResponder === terminal
     }
 
     /// Flags a session for something that happened outside its terminal, like its pull
@@ -721,6 +736,8 @@ final class Store: ObservableObject {
     }
 
     private func clearAttention(_ id: UUID) {
+        // Acknowledgment clears unread markers, never the underlying blocked/error/interrupted state.
+        guard isWatching(id) else { return }
         update(id) { $0.hasActivity = false; $0.needsAttention = false }
         Notifier.shared.clear(tabID: id)
     }
@@ -735,11 +752,9 @@ final class Store: ObservableObject {
     // MARK: Tabs
 
     func newTab(in groupID: UUID? = nil, command: String? = nil) {
-        guard let gi = groups.firstIndex(where: { $0.id == (groupID ?? selectedGroup?.id) }) ?? groups.indices.first else {
-            newGroup()
-            return
-        }
-        if command != "", groups[gi].useWorktrees {
+        if groups.isEmpty { groups.append(TabGroup(name: "Project 1")) }
+        guard let gi = groups.firstIndex(where: { $0.id == (groupID ?? selectedGroup?.id) }) ?? groups.indices.first else { return }
+        if command != nil, command != "", groups[gi].useWorktrees {
             newWorktreeProvider = command.map { SessionProvider.infer(command: $0) }
             newWorktreeGroupID = groups[gi].id
             return
@@ -747,8 +762,8 @@ final class Store: ObservableObject {
         let tab = TabItem(name: "Session \(groups[gi].tabs.count + 1)", command: command)
         groups[gi].tabs.append(tab)
         groups[gi].isCollapsed = false
-        makeTerminal(tab: tab, group: groups[gi])
-        selectedTabID = tab.id
+        makeTerminal(tab: tab, group: groups[gi], startProvider: command != nil && command != "")
+        focusSession(tab.id)
     }
 
     /// Adds a ready-made session to a project and starts it. `setup` runs once before the
@@ -766,8 +781,8 @@ final class Store: ObservableObject {
                 command = Self.afterSetup(setup, startupCommand(tab: tab, group: groups[gi]))
             }
         }
-        makeTerminal(tab: tab, group: groups[gi], command: command)
-        selectedTabID = tab.id
+        makeTerminal(tab: tab, group: groups[gi], command: command, startProvider: true)
+        focusSession(tab.id)
     }
 
     /// `command` after `setup`, only if it succeeds. A trailing ";" or "&" can't stand in
@@ -808,8 +823,12 @@ final class Store: ObservableObject {
         if let view = terminals.removeValue(forKey: id) {
             killTree(view)
             view.removeFromSuperview()
+        } else {
+            // Restart is explicit even if the persistent session has no attached view.
+            sessionHost.reset(id)
         }
-        makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group])
+        makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group], startProvider: true)
+        focusSession(id)
         objectWillChange.send()
     }
 
@@ -853,7 +872,7 @@ final class Store: ObservableObject {
         let group = TabGroup(name: "Project \(groups.count + 1)", tabs: [TabItem(name: "Session 1")])
         groups.append(group)
         makeTerminal(tab: group.tabs[0], group: group)
-        selectedTabID = group.tabs[0].id
+        focusSession(group.tabs[0].id)
         renamingID = group.id
     }
 
@@ -1032,28 +1051,80 @@ final class Store: ObservableObject {
 
 extension Store {
     var attentionSessions: [(tab: TabItem, group: TabGroup)] {
-        allTabs.filter { CanvasSessionState(runtime[$0.tab.id] ?? TabRuntime(exited: true)).needsAttention }
+        allTabs.filter {
+            let state = runtime[$0.tab.id] ?? TabRuntime(exited: true)
+            return state.needsAttention || CanvasSessionState(state).needsAttention
+        }
+    }
+
+    var commandTargetID: UUID? {
+        activeTerminalID.flatMap { isSessionVisible($0) ? $0 : nil }
+    }
+
+    var commandTarget: TabItem? { commandTargetID.flatMap(tab) }
+
+    func isSessionVisible(_ id: UUID) -> Bool {
+        guard let group = group(containing: id), selectedGroup?.id == group.id,
+              !canvas.project(group.id).minimized.contains(id) else { return false }
+        if let maximized = canvas.maximizedID { return maximized == id }
+        return canvasFilter.includes(CanvasSessionState(runtime[id] ?? TabRuntime(exited: true)))
+    }
+
+    private func deactivateTerminal() {
+        let previous = engagedTerminalID
+        activeTerminalID = nil
+        engagedTerminalID = nil
+        if let previous, let terminal = terminals[previous],
+           terminal.window?.firstResponder === terminal { terminal.window?.makeFirstResponder(nil) }
+    }
+
+    private func terminalFocusChanged(_ id: UUID, engaged: Bool) {
+        if engaged {
+            guard isSessionVisible(id) else { return }
+            activeTerminalID = id
+            selectedTabID = id
+            engagedTerminalID = id
+            // NSWindow completes its responder transition after becomeFirstResponder returns.
+            DispatchQueue.main.async { [weak self] in self?.clearAttention(id) }
+        } else if engagedTerminalID == id {
+            engagedTerminalID = nil
+        }
     }
 
     func selectProject(_ id: UUID) {
         guard let group = groups.first(where: { $0.id == id }) else { return }
-        showAllWindows()
+        deactivateTerminal()
+        canvas.maximizedID = nil
+        canvasFilter = .all
         canvas.projectID = id
         if !group.tabs.contains(where: { $0.id == selectedTabID }) { selectedTabID = group.tabs.first?.id }
     }
 
     func focusSession(_ id: UUID) {
         guard let group = group(containing: id) else { return }
-        canvas.projects[group.id]?.minimized.remove(id)
+        var settings = canvas.project(group.id)
+        settings.minimized.remove(id)
+        canvas.projects[group.id] = settings
+        canvasFilter = .all
         canvas.projectID = group.id
-        canvas.maximizedID = id
+        if canvas.maximizedID != nil { canvas.maximizedID = id }
+        activeTerminalID = id
         selectedTabID = id
+        // Attached views focus immediately; TerminalHost handles views revealed by this change.
+        if let terminal = terminals[id], let window = terminal.window, window.attachedSheet == nil {
+            window.makeFirstResponder(terminal)
+        }
+    }
+
+    func maximizeSession(_ id: UUID) {
+        focusSession(id)
+        guard tab(id) != nil else { return }
+        canvas.maximizedID = id
     }
 
     func showAllWindows() {
-        let terminal = canvas.maximizedID.flatMap { terminals[$0] }
         canvas.maximizedID = nil
-        if let terminal, terminal.window?.firstResponder === terminal { terminal.window?.makeFirstResponder(nil) }
+        canvasFilter = .all
     }
 
     func minimizeSession(_ id: UUID) {
@@ -1061,17 +1132,12 @@ extension Store {
         var state = canvas.project(group.id)
         state.minimized.insert(id)
         canvas.projects[group.id] = state
+        if activeTerminalID == id { deactivateTerminal() }
         if canvas.maximizedID == id { showAllWindows() }
-        if let terminal = NSApp.keyWindow?.firstResponder as? TermView, terminal.tabID == id {
-            NSApp.keyWindow?.makeFirstResponder(nil)
-        }
-        if selectedTabID == id { selectedTabID = group.tabs.first(where: { !state.minimized.contains($0.id) })?.id }
     }
 
     func restoreSession(_ id: UUID) {
-        guard let group = group(containing: id) else { return }
-        canvas.projects[group.id]?.minimized.remove(id)
-        selectedTabID = id
+        focusSession(id)
     }
 
     func minimizeIdle(in group: TabGroup) {

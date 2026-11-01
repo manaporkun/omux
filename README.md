@@ -1,7 +1,8 @@
 # omux
 
-This fork adds a native project workspace: live terminal grid, maximize/back, a session shelf,
-cross-project attention navigation, and persistent tmux-backed sessions. See [workspace development and current scope](docs/workspace.md).
+This fork adds a native project workspace: direct in-grid terminal interaction, explicit maximize/restore,
+a session shelf, cross-project attention navigation, and persistent tmux-backed sessions.
+New terminals open shells; agents start only through explicit actions. See [workspace development and current scope](docs/workspace.md).
 
 **A 5 MB native Mac terminal for running fleets of coding agents.**
 
@@ -89,8 +90,12 @@ Beta builds, distribution builds and tests are in [docs/building.md](docs/buildi
 | Jump to session | ⌘K |
 | Next / previous session | ⇧⌘] / ⇧⌘[ |
 | Session 1–9 in the current project | ⌘1 … ⌘9 |
+| Maximize active terminal / restore grid | ⇧⌘M |
 | Right panel / Files / Changes / Browser | ⌥⌘F / ⌥⌘1 / ⌥⌘2 / ⌥⌘3 |
 | Terminal font bigger / smaller / default | ⌘+ or ⌘= / ⌘− / ⌘0 |
+
+Session commands target the visibly active terminal, not a hidden retained selection. Escape remains
+available to terminal applications; use Restore Grid or ⇧⌘M for layout navigation.
 
 ---
 

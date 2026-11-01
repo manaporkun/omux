@@ -26,37 +26,102 @@ enum WorkspaceSmokeChecks {
                 guard firstPID > 0, secondPID > 0 else { throw CheckError.failed("Shells did not start") }
                 checks.append("Real shell terminals started")
                 for tab in group.tabs {
-                    store.terminal(for: tab.id)?.send(txt: "printf '%s\\n' 'omux Workspace — real local shell' 'No agent API calls in this preview.' 'Click to maximize. Minimize and restore keep this process alive.'\n")
+                    store.terminal(for: tab.id)?.send(txt: "printf '%s\\n' 'omux Workspace — real local shell' 'No agent API calls in this preview.' 'Click to type. Use Maximize to expand; restore keeps keyboard focus.'\n")
                 }
                 try await Task.sleep(for: .milliseconds(300))
                 _ = snapshot("grid.png")
-                store.focusSession(second.id)
+                guard let window = secondView.window,
+                      let click = NSEvent.mouseEvent(with: .leftMouseDown,
+                        location: secondView.convert(NSPoint(x: 40, y: 40), to: nil),
+                        modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 1,
+                        clickCount: 1, pressure: 1) else { throw CheckError.failed("Missing terminal window") }
+                secondView.mouseDown(with: click)
+                try await Task.sleep(for: .milliseconds(200))
+                guard store.canvas.maximizedID == nil, window.firstResponder === secondView,
+                      store.commandTargetID == second.id, store.engagedTerminalID == second.id,
+                      secondView.process.shellPid == secondPID else {
+                    throw CheckError.failed("A terminal click did not focus the unchanged grid")
+                }
+                checks.append("One terminal click focuses the grid card without maximizing")
+                let inputFile = Persistence.directory.appendingPathComponent("keyboard-input.txt")
+                let input = "printf typed > " + Git.quote(inputFile.path) + "\n"
+                for character in input {
+                    guard let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                        context: nil, characters: String(character), charactersIgnoringModifiers: String(character),
+                        isARepeat: false, keyCode: character == "\n" ? 36 : 0) else { continue }
+                    secondView.keyDown(with: key)
+                }
+                try await Task.sleep(for: .milliseconds(300))
+                guard (try? String(contentsOf: inputFile, encoding: .utf8)) == "typed" else {
+                    throw CheckError.failed("Keyboard input did not reach the focused grid shell")
+                }
+                checks.append("Keyboard events type directly into the focused grid shell")
+                store.maximizeSession(second.id)
                 try await Task.sleep(for: .milliseconds(350))
                 guard store.canvas.maximizedID == second.id,
                       store.terminal(for: second.id) === secondView,
                       secondView.process.shellPid == secondPID, secondView.superview != nil else {
                     throw CheckError.failed("Maximize replaced or detached the terminal")
                 }
-                checks.append("Maximize preserves terminal and process")
+                checks.append("Explicit maximize preserves terminal and process")
                 _ = snapshot("focused.png")
-                if let window = secondView.window, let escape = NSEvent.keyEvent(
+                let escapeFile = Persistence.directory.appendingPathComponent("escape.bin")
+                secondView.send(txt: "stty -echo -icanon min 1 time 20; dd bs=1 count=1 of=" + Git.quote(escapeFile.path) + " 2>/dev/null; stty sane\n")
+                try await Task.sleep(for: .milliseconds(200))
+                if let escape = NSEvent.keyEvent(
                     with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                     windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
                     charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53
-                ) { NSApp.postEvent(escape, atStart: false) }
+                ) { NSApp.sendEvent(escape) }
                 try await Task.sleep(for: .milliseconds(350))
-                guard store.canvas.maximizedID == nil else {
-                    let responder = secondView.window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
-                    throw CheckError.failed("Escape did not return to the grid (responder: \(responder), app active: \(NSApp.isActive))")
+                guard store.canvas.maximizedID == second.id,
+                      (try? Data(contentsOf: escapeFile)) == Data([0x1b]) else {
+                    throw CheckError.failed("Escape was intercepted instead of reaching the terminal")
                 }
-                guard secondView.window?.firstResponder !== secondView else {
-                    throw CheckError.failed("Grid retained terminal keyboard focus")
+                checks.append("Escape reaches the terminal without changing layout")
+                store.showAllWindows()
+                try await Task.sleep(for: .milliseconds(350))
+                guard store.canvas.maximizedID == nil, window.firstResponder === secondView,
+                      secondView.superview != nil, secondView.process.shellPid == secondPID,
+                      store.commandTargetID == second.id else {
+                    throw CheckError.failed("Restore grid lost terminal focus or process")
                 }
-                checks.append("Escape returns to grid and releases terminal keyboard focus")
-                guard secondView.superview != nil, secondView.process.shellPid == secondPID else {
-                    throw CheckError.failed("Returning to grid lost the terminal")
+                checks.append("Restore grid preserves terminal focus and process")
+                store.minimizeSession(second.id)
+                guard store.selectedTabID == second.id, store.commandTargetID == nil else {
+                    throw CheckError.failed("A minimized retained selection remained a command target")
                 }
-                checks.append("Return to grid preserves terminal and process")
+                store.focusSession(second.id)
+                try await Task.sleep(for: .milliseconds(250))
+                store.canvasFilter = .needsYou
+                guard store.commandTargetID == nil else {
+                    throw CheckError.failed("A filtered-out card remained a command target")
+                }
+                store.focusSession(second.id)
+                try await Task.sleep(for: .milliseconds(250))
+                guard store.commandTargetID == second.id, window.firstResponder === secondView else {
+                    throw CheckError.failed("Explicit focus did not reveal the hidden target")
+                }
+                checks.append("Hidden and minimized selections cannot receive session commands; explicit focus reveals them")
+                store.selectProject(group.id)
+                secondView.send(txt: "printf '\\033]7501;state=blocked:kind=question:app=omux-test\\007'\n")
+                try await Task.sleep(for: .milliseconds(300))
+                store.requestAttention(second.id)
+                store.selectedTabID = second.id
+                try await Task.sleep(for: .milliseconds(200))
+                guard store.runtime[second.id]?.needsAttention == true,
+                      store.runtime[second.id]?.statusState == .blocked, store.engagedTerminalID == nil else {
+                    throw CheckError.failed("Retained selection acknowledged attention without engagement")
+                }
+                store.focusSession(second.id)
+                try await Task.sleep(for: .milliseconds(250))
+                guard store.runtime[second.id]?.statusState == .blocked,
+                      store.attentionSessions.contains(where: { $0.tab.id == second.id }) else {
+                    throw CheckError.failed("Engagement resolved the underlying blocked state")
+                }
+                checks.append("Project/retained selection does not acknowledge unread; terminal engagement preserves blocked attention")
                 store.minimizeSession(first.id)
                 try await Task.sleep(for: .milliseconds(200))
                 guard store.canvas.project(group.id).minimized.contains(first.id),
@@ -79,7 +144,7 @@ enum WorkspaceSmokeChecks {
                 }
                 checks.append("Slot swaps preserve sessions")
                 store.minimizeSession(first.id)
-                store.focusSession(second.id)
+                store.maximizeSession(second.id)
                 store.setWindowSize(.large, in: group.id)
                 try await Task.sleep(for: .milliseconds(700))
                 guard let saved = Persistence.loadWorkspace(), saved.canvas == store.canvas,

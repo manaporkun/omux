@@ -9,7 +9,7 @@ struct OmuxApp: App {
     init() { Prefs.importReleaseSettingsIfBeta() }
 
     var body: some Scene {
-        Window(Persistence.isWorkspacePreview ? "omux Workspace" : Persistence.isBeta ? "omux Beta" : "omux", id: "main") {
+        Window(Persistence.isWorkspacePreview ? "omux Dev" : Persistence.isBeta ? "omux Beta" : "omux", id: "main") {
             ContentView()
                 .environmentObject(store)
                 .frame(minWidth: 720, minHeight: 420)
@@ -27,7 +27,6 @@ enum Prefs {
     static let showFolderPath = "showFolderPath"
     static let usageInterval = "usageInterval"
     static let theme = "theme"
-    static let autoResume = "autoResume"
     static let persistentSessions = "persistentSessions"
     static let showFiles = "showFiles"
     static let filesByDate = "filesByDate"
@@ -45,7 +44,7 @@ enum Prefs {
     static let notifySound = "notifySound"
     static let welcomed = "welcomed"
 
-    static let all = [confirmQuit, showFolderPath, usageInterval, theme, autoResume, persistentSessions, showFiles, filesByDate,
+    static let all = [confirmQuit, showFolderPath, usageInterval, theme, persistentSessions, showFiles, filesByDate,
                       filesBrowserCollapsed, previewWrapLines, panelTab, fontFamily, fontSize,
                       notifyNeedsYou, notifyDone, notifyPrograms]
 
@@ -69,7 +68,6 @@ struct SettingsView: View {
     @AppStorage(Prefs.theme) private var theme = Theme.dark.rawValue
     @AppStorage(Prefs.fontFamily) private var fontFamily = ""
     @AppStorage(Prefs.fontSize) private var fontSize = Fonts.defaultSize
-    @AppStorage(Prefs.autoResume) private var autoResume = false
     @AppStorage(Prefs.persistentSessions) private var persistentSessions = true
     @AppStorage(Prefs.notifyStyle) private var notifyStyle = "banner"
     @AppStorage(Prefs.notifySound) private var notifySound = "Default"
@@ -103,8 +101,7 @@ struct SettingsView: View {
                 Toggle("Wrap long lines in file preview", isOn: $wrapLines)
             }
             Section("Sessions") {
-                Toggle("Auto-resume agent sessions at launch", isOn: $autoResume)
-                Text("Existing persistent sessions always reconnect. This controls starting new agents when no running session exists.")
+                Text("New sessions open as shells. Agents start only with Start, Restart, or an explicit agent action. Existing persistent sessions always reconnect.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Toggle("Keep sessions running when omux closes", isOn: $persistentSessions)
@@ -361,14 +358,21 @@ struct AppCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Close Session") { if let id = store.selectedTabID { store.requestClose(id) } }
-                .keyboardShortcut("w")
+            Button(store.commandTarget.map { "Close \($0.name)" } ?? "Close Session") {
+                if let id = store.commandTargetID { store.requestClose(id) }
+            }
+            .keyboardShortcut("w")
+            .disabled(store.commandTargetID == nil)
             Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
         }
         CommandGroup(after: .sidebar) {
-            Button("All Windows") { store.showAllWindows() }
-                .keyboardShortcut(.escape, modifiers: [])
+            Button(store.canvas.maximizedID == nil ? "Maximize Active Terminal" : "Restore Grid") {
+                if store.canvas.maximizedID != nil { store.showAllWindows() }
+                else if let id = store.commandTargetID { store.maximizeSession(id) }
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(store.canvas.maximizedID == nil && store.commandTargetID == nil)
             Button("Find Project…") { NotificationCenter.default.post(name: .findWorkspaceProject, object: nil) }
                 .keyboardShortcut("p")
             Button("Next Needing You") { store.nextAttentionSession() }
@@ -387,15 +391,27 @@ struct AppCommands: Commands {
             Button("Default Font Size") { Fonts.adjustSize(by: nil) }.keyboardShortcut("0")
         }
         CommandMenu("Session") {
-            Button("Rename") { store.renamingID = store.selectedTabID }.keyboardShortcut("r")
-            Button("Edit Session…") { store.editingTabID = store.selectedTabID }.keyboardShortcut("i")
-            Button("Restart Session") { if let id = store.selectedTabID { store.restart(id) } }
+            Button(store.commandTarget.map { "Target: \($0.name)" } ?? "No active terminal") {}
+                .disabled(true)
+            if let retained = store.selectedTab, store.commandTargetID == nil {
+                Button("Reveal \(retained.name)") { store.focusSession(retained.id) }
+            }
+            Divider()
+            Button("Rename") { store.renamingID = store.commandTargetID }.keyboardShortcut("r")
+                .disabled(store.commandTargetID == nil)
+            Button("Edit Session…") { store.editingTabID = store.commandTargetID }.keyboardShortcut("i")
+                .disabled(store.commandTargetID == nil)
+            Button("Restart Session") { if let id = store.commandTargetID { store.restart(id) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-            Button("Interrupt (Ctrl-C)") { if let id = store.selectedTabID { store.stop(id) } }
+                .disabled(store.commandTargetID == nil)
+            Button("Interrupt (Ctrl-C)") { if let id = store.commandTargetID { store.stop(id) } }
                 .keyboardShortcut(".", modifiers: [.command, .shift])
-            Button("Kill Session") { if let id = store.selectedTabID { store.kill(id) } }
-            Button("Start or Continue Session") { if let id = store.selectedTabID { store.start(id) } }
+                .disabled(store.commandTargetID == nil)
+            Button("Kill Session") { if let id = store.commandTargetID { store.kill(id) } }
+                .disabled(store.commandTargetID == nil)
+            Button("Start or Continue Session") { if let id = store.commandTargetID { store.start(id) } }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .disabled(store.commandTargetID == nil)
             Divider()
             Button("Jump to Session…") { store.showQuickSwitcher = true }.keyboardShortcut("k")
         }
@@ -437,16 +453,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         WorkspaceSmokeChecks.runIfRequested()
         PersistenceSmokeChecks.runIfRequested()
+        ExplicitLaunchSmokeChecks.runIfRequested()
         #endif
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == 53,
-               event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
-               event.window?.attachedSheet == nil,
-               let terminal = event.window?.firstResponder as? TermView,
-               Store.shared.canvas.maximizedID == terminal.tabID {
-                Store.shared.showAllWindows()
-                return nil
-            }
             guard Fonts.isBiggerKey(event.charactersIgnoringModifiers, event.modifierFlags) else { return event }
             Fonts.adjustSize(by: 1)
             return nil

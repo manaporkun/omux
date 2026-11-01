@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 swift build
 OMUX_BIN_DIR=$(swift build --show-bin-path)
-OMUX_PREVIEW_APP="${1:-$PWD/build/omux Workspace.app}"
+OMUX_PREVIEW_APP="$PWD/build/omux Dev.app"
 mkdir -p "$OMUX_PREVIEW_APP/Contents/MacOS" "$OMUX_PREVIEW_APP/Contents/Resources" "$OMUX_PREVIEW_APP/Contents/Frameworks"
 cp "$OMUX_BIN_DIR/omux" "$OMUX_PREVIEW_APP/Contents/MacOS/omux"
 cp "$OMUX_BIN_DIR/omux-session-relay" "$OMUX_PREVIEW_APP/Contents/MacOS/omux-session-relay"
@@ -18,7 +18,8 @@ import plistlib, sys
 from pathlib import Path
 info = plistlib.loads(Path('Info.plist').read_bytes())
 name = Path(sys.argv[1]).parents[1].stem
-identifier = 'net.pf1.omux.persistence.workspace-preview' if 'Persistent Workspace' in name else 'net.pf1.omux.workspace-preview'
+# Preserve the existing persistent preview's preferences and session namespace.
+identifier = 'net.pf1.omux.persistence.workspace-preview'
 info.update(CFBundleIdentifier=identifier, CFBundleName=name,
             CFBundleDisplayName=name, SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False)
 # This development preview doesn't register a second Finder service or folder association.

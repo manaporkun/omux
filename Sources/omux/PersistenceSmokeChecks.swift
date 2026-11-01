@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import Darwin
 
 /// Three real application launches exercise graceful quit, reattachment, status, and lost processes.
 /// This entry point is opt-in and refuses workspaces containing agents or custom commands.
@@ -65,6 +66,30 @@ enum PersistenceSmokeChecks {
                     guard try String(contentsOf: marker, encoding: .utf8).split(separator: "\n").count == 1 else { throw Failure("Startup work ran twice") }
                     guard store.runtime[tabs[0].id]?.statusState == .blocked else { throw Failure("Reopening lost the latest program status") }
                     checks += ["Background work finishes while the application is closed", "Reopen attaches to the same PID without repeating startup", "Blocked status survives app shutdown and reattachment"]
+                    guard let pane = host.pane(tabs[2].id), !pane.dead, pane.pid > 0,
+                          kill(pane.pid, SIGKILL) == 0 else { throw Failure("Could not kill fixture shell") }
+                    for _ in 0..<40 {
+                        if host.pane(tabs[2].id)?.dead == true && store.runtime[tabs[2].id]?.exited == true { break }
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
+                    guard host.pane(tabs[2].id)?.dead == true, store.runtime[tabs[2].id]?.exited == true else {
+                        throw Failure("Fixture shell death was not observed")
+                    }
+                    store.start(tabs[2].id)
+                    try await Task.sleep(for: .milliseconds(700))
+                    let recovered = Persistence.directory.appendingPathComponent("dead-pane-recovered.txt")
+                    guard let replacement = host.pane(tabs[2].id), !replacement.dead,
+                          replacement.pid > 0, replacement.pid != pane.pid,
+                          let terminal = store.terminal(for: tabs[2].id), terminal.window != nil,
+                          store.runtime[tabs[2].id]?.exited == false else {
+                        throw Failure("Explicit Start failed to replace the owned dead pane")
+                    }
+                    terminal.send(txt: "printf recovered > " + Git.quote(recovered.path) + "\n")
+                    try await Task.sleep(for: .milliseconds(400))
+                    guard (try? String(contentsOf: recovered, encoding: .utf8)) == "recovered" else {
+                        throw Failure("Recovered terminal could not execute a shell command")
+                    }
+                    checks.append("Explicit Start recovers a real killed pane into an attached usable terminal")
                     host.destroy(tabs[2].id) // Simulate a process lost after reboot; keep its saved record.
                     try JSONEncoder().encode(Phase(ids: previous.ids, pids: previous.pids, checks: checks)).write(to: phaseFile, options: .atomic)
                     try result(phase, checks: checks)

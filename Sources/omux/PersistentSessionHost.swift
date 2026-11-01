@@ -12,6 +12,7 @@ final class PersistentSessionHost {
     private let config: URL
 
     struct Pane {
+        /// Positive for live panes; zero when tmux retains a dead pane without a PID.
         let pid: pid_t
         let dead: Bool
         var cwd: String? = nil
@@ -59,8 +60,15 @@ final class PersistentSessionHost {
         }
         return nil
     }
-    func target(_ id: UUID, server: Bool = false) -> String { resolve(id, server: server) ?? name(id, server: server) }
-    private func paneTarget(_ id: UUID, server: Bool = false) -> String { target(id, server: server) + ":0.0" }
+    func target(_ id: UUID, server: Bool = false) throws -> String {
+        guard let target = resolve(id, server: server) else {
+            throw HostError.command("The exact persistent session no longer exists.")
+        }
+        return target
+    }
+    private func paneTarget(_ id: UUID, server: Bool = false) throws -> String {
+        try target(id, server: server) + ":0.0"
+    }
     var arguments: [String] { ["-L", namespace, "-f", config.path] }
     func folder(_ id: UUID) -> URL { directory.appendingPathComponent("sessions", isDirectory: true).appendingPathComponent(id.uuidString.lowercased(), isDirectory: true) }
     func statusFile(_ id: UUID) -> URL { folder(id).appendingPathComponent("status.json") }
@@ -112,10 +120,14 @@ final class PersistentSessionHost {
     }
 
     func pane(_ id: UUID, server: Bool = false) -> Pane? {
-        let result = run(["display-message", "-p", "-t", paneTarget(id, server: server), "#{pane_pid}\t#{pane_dead}\t#{@omux-id}\t#{pane_current_path}"])
+        guard let target = try? paneTarget(id, server: server) else { return nil }
+        let result = run(["display-message", "-p", "-t", target, "#{pane_pid}\t#{pane_dead}\t#{@omux-id}\t#{pane_current_path}"])
         let fields = result.out.split(separator: "\t", omittingEmptySubsequences: false)
-        guard result.ok, fields.count >= 4, fields[2] == id.uuidString.lowercased(), let pid = Int32(fields[0]) else { return nil }
-        return Pane(pid: pid, dead: fields[1] == "1", cwd: fields.dropFirst(3).joined(separator: "\t"))
+        guard result.ok, fields.count >= 4, fields[2] == id.uuidString.lowercased() else { return nil }
+        let dead = fields[1] == "1"
+        guard let pid = Int32(fields[0]) ?? (dead && fields[0].isEmpty ? 0 : nil),
+              dead || pid > 0 else { return nil }
+        return Pane(pid: pid, dead: dead, cwd: fields.dropFirst(3).joined(separator: "\t"))
     }
 
     func ensure(_ id: UUID, cwd: String, shell: String, environment: [String: String]) throws -> Attachment {
@@ -123,7 +135,7 @@ final class PersistentSessionHost {
         guard binary != nil else { throw HostError.unavailable }
         guard FileManager.default.isExecutableFile(atPath: relay) else { throw HostError.command("The bundled session relay is missing; rebuild the app") }
         if let pane = pane(id), !pane.dead {
-            let pipe = run(["display-message", "-p", "-t", paneTarget(id), "#{pane_pipe}"])
+            let pipe = run(["display-message", "-p", "-t", try paneTarget(id), "#{pane_pipe}"])
             if pipe.out != "1" {
                 try? FileManager.default.removeItem(at: statusFile(id))
                 try installRelay(id)
@@ -142,9 +154,10 @@ final class PersistentSessionHost {
         }
         let created = run(args + [shell, "-l"], environment: environment.filter { $0.key != "OMUX_CODEX_TOKEN" })
         guard created.ok else { throw HostError.command(created.out) }
-        let tagged = run(["set-option", "-t", target(id), "@omux-id", id.uuidString.lowercased()])
+        let sessionTarget = try target(id)
+        let tagged = run(["set-option", "-t", sessionTarget, "@omux-id", id.uuidString.lowercased()])
         guard tagged.ok else {
-            run(["kill-session", "-t", target(id)]) // This invocation just created the session.
+            run(["kill-session", "-t", sessionTarget]) // This invocation just created the session.
             throw HostError.command(tagged.out)
         }
         try setNeedsResume(interrupted, id: id)
@@ -154,7 +167,7 @@ final class PersistentSessionHost {
     }
 
     private func installRelay(_ id: UUID) throws {
-        let pipe = run(["pipe-pane", "-O", "-t", paneTarget(id), "exec " + Self.quote(relay) + " " + Self.quote(statusFile(id).path)])
+        let pipe = run(["pipe-pane", "-O", "-t", try paneTarget(id), "exec " + Self.quote(relay) + " " + Self.quote(statusFile(id).path)])
         guard pipe.ok else { throw HostError.command(pipe.out) }
     }
 
@@ -165,8 +178,11 @@ final class PersistentSessionHost {
         for line in result.out.split(separator: "\n") {
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
             guard fields.count >= 5, let id = UUID(uuidString: String(fields[3])),
-                  fields[0] == name(id), let pid = Int32(fields[1]) else { continue }
-            panes[id] = Pane(pid: pid, dead: fields[2] == "1", cwd: fields.dropFirst(4).joined(separator: "\t"))
+                  fields[0] == name(id) else { continue }
+            let dead = fields[2] == "1"
+            guard let pid = Int32(fields[1]) ?? (dead && fields[1].isEmpty ? 0 : nil),
+                  dead || pid > 0 else { continue }
+            panes[id] = Pane(pid: pid, dead: dead, cwd: fields.dropFirst(4).joined(separator: "\t"))
         }
         return panes
     }
@@ -188,10 +204,13 @@ final class PersistentSessionHost {
         try prepareFiles(id)
         try JSONEncoder().encode(Record(needsResume: value)).write(to: recordFile(id), options: .atomic)
     }
-    func capture(_ id: UUID) -> String { run(["capture-pane", "-p", "-e", "-S", "-5000", "-t", paneTarget(id)]).out }
+    func capture(_ id: UUID) -> String {
+        guard let target = try? paneTarget(id) else { return "" }
+        return run(["capture-pane", "-p", "-e", "-S", "-5000", "-t", target]).out
+    }
     func destroy(_ id: UUID, server: Bool = false) {
-        guard pane(id, server: server) != nil else { return }
-        run(["kill-session", "-t", target(id, server: server)])
+        guard pane(id, server: server) != nil, let target = try? target(id, server: server) else { return }
+        run(["kill-session", "-t", target])
     }
 
     func loadLease(_ id: UUID) -> Lease? {
@@ -222,17 +241,18 @@ final class PersistentSessionHost {
         let shell = environment["SHELL"] ?? "/bin/zsh"
         let result = run(["new-session", "-d", "-s", name(id, server: true), "-c", NSHomeDirectory(), shell, "-l"])
         guard result.ok else { throw HostError.command(result.out) }
-        guard run(["set-option", "-t", target(id, server: true), "@omux-id", id.uuidString.lowercased()]).ok else { throw HostError.ownership }
+        let sessionTarget = try target(id, server: true)
+        guard run(["set-option", "-t", sessionTarget, "@omux-id", id.uuidString.lowercased()]).ok else { throw HostError.ownership }
         // source-file reads the private environment over stdin, never argv, disk, or terminal history.
         let validKey = try! NSRegularExpression(pattern: "^[A-Za-z_][A-Za-z0-9_]*$")
         let lines = environment.sorted(by: { $0.key < $1.key }).filter {
             validKey.firstMatch(in: $0.key, range: NSRange($0.key.startIndex..., in: $0.key)) != nil
-        }.map { "set-environment -t " + Self.quote(target(id, server: true)) + " " + Self.quote($0.key) + " " + Self.quote($0.value) }.joined(separator: "\n") + "\n"
+        }.map { "set-environment -t " + Self.quote(sessionTarget) + " " + Self.quote($0.key) + " " + Self.quote($0.value) }.joined(separator: "\n") + "\n"
         guard run(["source-file", "-"], input: Data(lines.utf8)).ok else {
             destroy(id, server: true)
             throw HostError.command("The server environment could not be initialized")
         }
-        let started = run(["respawn-pane", "-k", "-t", paneTarget(id, server: true), shell, "-lc", command])
+        let started = run(["respawn-pane", "-k", "-t", sessionTarget + ":0.0", shell, "-lc", command])
         guard started.ok else { throw HostError.command(started.out) }
     }
     static func quote(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }

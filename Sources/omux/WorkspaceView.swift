@@ -6,7 +6,10 @@ struct WorkspaceView: View {
     @EnvironmentObject var store: Store
     let theme: Theme
     @Binding var showFiles: Bool
-    @ViewState private var filter: CanvasFilter = .all
+    private var filter: CanvasFilter {
+        get { store.canvasFilter }
+        nonmutating set { store.canvasFilter = newValue }
+    }
 
     private var group: TabGroup? { store.selectedGroup }
     private func state(_ tab: TabItem) -> CanvasSessionState {
@@ -94,14 +97,20 @@ struct WorkspaceView: View {
                             if !minimized.isEmpty { Button("Restore all") { minimized.forEach { store.restoreSession($0.id) } } }
                         }
                     } else {
-                        ScrollView([.vertical, .horizontal]) {
-                            LazyVGrid(columns: Array(repeating: GridItem(.fixed(layout.width), spacing: 12), count: layout.columns), spacing: 12) {
-                                ForEach(visible) { tab in
-                                    TerminalTile(tab: tab, group: group, theme: theme)
-                                        .frame(width: layout.width, height: layout.height)
+                        ScrollViewReader { proxy in
+                            ScrollView([.vertical, .horizontal]) {
+                                LazyVGrid(columns: Array(repeating: GridItem(.fixed(layout.width), spacing: 12), count: layout.columns), spacing: 12) {
+                                    ForEach(visible) { tab in
+                                        TerminalTile(tab: tab, group: group, theme: theme)
+                                            .frame(width: layout.width, height: layout.height)
+                                            .id(tab.id)
+                                    }
                                 }
+                                .padding(.horizontal, 16).padding(.vertical, 14)
                             }
-                            .padding(.horizontal, 16).padding(.vertical, 14)
+                            .onChange(of: store.activeTerminalID, initial: true) { _, id in
+                                if let id { proxy.scrollTo(id) }
+                            }
                         }
                     }
                 }
@@ -115,9 +124,18 @@ struct WorkspaceView: View {
             Image(systemName: "rectangle.grid.2x2").foregroundStyle(.secondary)
             Text(group.name).fontWeight(.semibold).lineLimit(1)
             Text("\(group.tabs.count) sessions").font(.caption).foregroundStyle(.tertiary)
+            if let target = store.commandTarget {
+                Label(target.name, systemImage: "keyboard")
+                    .foregroundStyle(Color.accentColor).lineLimit(1)
+                    .help("Session commands target \(target.name)")
+                    .accessibilityLabel("Session command target: \(target.name)")
+            } else {
+                Text("Select a terminal").foregroundStyle(.tertiary)
+                    .help("Click a terminal or its name to target session commands")
+            }
             Spacer()
             Menu {
-                Button("Project’s Default Agent") { store.newTab(in: group.id) }
+                Button("Project’s Default Agent") { store.newTab(in: group.id, command: group.command ?? group.provider.command) }
                 Button("Claude Code") { store.newTab(in: group.id, command: "claude") }
                 Button("Codex") { store.newTab(in: group.id, command: "codex") }
                 Button("Shell") { store.newTab(in: group.id, command: "") }
@@ -148,7 +166,7 @@ struct WorkspaceView: View {
                             }
                             .padding(.horizontal, 10).padding(.vertical, 5)
                             .background(.primary.opacity(0.05), in: Capsule())
-                            .overlay(Capsule().strokeBorder(state(tab).needsAttention ? Color.orange : Color.primary.opacity(0.12)))
+                            .overlay(Capsule().strokeBorder(state(tab).needsAttention || store.runtime[tab.id]?.needsAttention == true ? Color.orange : Color.primary.opacity(0.12)))
                         }
                         .buttonStyle(.plain)
                         .contextMenu { Button("Open Session") { store.focusSession(tab.id) }; TabMenu(tab: tab, groupID: store.group(containing: tab.id)?.id ?? UUID()) }
@@ -167,8 +185,9 @@ struct WorkspaceView: View {
     private func focused(_ tab: TabItem, in group: TabGroup) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Button { store.showAllWindows() } label: { Label("All windows", systemImage: "rectangle.grid.2x2") }
-                    .help("Return to the project grid (Esc)")
+                Button { store.showAllWindows() } label: { Label("Restore Grid", systemImage: "rectangle.grid.2x2") }
+                    .help("Restore the project grid (⇧⌘M); Escape stays in the terminal")
+                    .accessibilityLabel("Restore project grid")
                 Divider().frame(height: 14)
                 Button { store.selectRelative(-1) } label: { Image(systemName: "chevron.left") }
                     .help("Previous session (⇧⌘[)")
@@ -189,7 +208,7 @@ struct WorkspaceView: View {
             .background(Color(nsColor: theme.chrome))
             Divider()
             SessionHeader(theme: theme, showFiles: $showFiles)
-            LiveTerminal(tabID: tab.id, theme: theme, isFocused: true)
+            LiveTerminal(tabID: tab.id, theme: theme, isFocused: store.activeTerminalID == tab.id)
                 .id(tab.id)
         }
     }
@@ -236,6 +255,8 @@ private struct LiveTerminal: View {
             Color(nsColor: theme.background)
             if let term {
                 TerminalHost(termView: term, theme: theme, isFocused: isFocused)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
             } else { ProgressView().controlSize(.small) }
         }
         .task { term = store.terminal(for: tabID) }
@@ -266,32 +287,41 @@ private struct TerminalTile: View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
                 SessionStateDot(state: state)
+                if runtime.needsAttention {
+                    Image(systemName: "bell.badge.fill").foregroundStyle(.orange)
+                        .accessibilityLabel("Unread session activity")
+                }
                 if store.renamingID == tab.id {
                     RenameField(initial: tab.name) { store.rename(tab.id, to: $0) }
-                } else { Text(tab.name).fontWeight(.semibold).lineLimit(1) }
+                } else {
+                    Button { store.focusSession(tab.id) } label: {
+                        HStack(spacing: 5) {
+                            if store.activeTerminalID == tab.id {
+                                Image(systemName: "keyboard").foregroundStyle(Color.accentColor)
+                            }
+                            Text(tab.name).fontWeight(.semibold).lineLimit(1)
+                        }
+                    }
+                    .help("Focus \(tab.name) for typing without changing the grid")
+                    .accessibilityLabel("Focus terminal \(tab.name)")
+                    .accessibilityValue(store.activeTerminalID == tab.id ? "Session command target" : "Not active")
+                }
                 Text(store.provider(of: tab).label).foregroundStyle(.tertiary).font(.system(size: 9)).lineLimit(1)
                 Spacer(minLength: 0)
                 Text(state.label).foregroundStyle(state.needsAttention ? .orange : .secondary).font(.system(size: 10)).lineLimit(1)
                 Button { store.minimizeSession(tab.id) } label: { Image(systemName: "minus") }
                     .help("Minimize to the shelf")
-                Button { store.focusSession(tab.id) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .help("Open session")
+                Button { store.maximizeSession(tab.id) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+                    .help("Maximize \(tab.name) (⇧⌘M for the active terminal)")
+                    .accessibilityLabel("Maximize \(tab.name)")
             }
             .font(.system(size: 11)).buttonStyle(.plain)
             .padding(.horizontal, 10).frame(height: 32)
             .background(Color(nsColor: theme.chrome))
             .contentShape(Rectangle())
             .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
-            .onTapGesture(count: 2) { store.focusSession(tab.id) }
             Divider()
-            LiveTerminal(tabID: tab.id, theme: theme, isFocused: false)
-                .overlay {
-                    Color.clear.contentShape(Rectangle())
-                        .onTapGesture { store.focusSession(tab.id) }
-                        .accessibilityLabel("Open \(tab.name)")
-                        .accessibilityAddTraits(.isButton)
-                        .help("Click to work with this session")
-                }
+            LiveTerminal(tabID: tab.id, theme: theme, isFocused: store.activeTerminalID == tab.id)
             if runtime.interrupted || runtime.exited {
                 HStack {
                     Text(runtime.interrupted ? "Previous process ended" : "Session ended").foregroundStyle(.secondary)
@@ -316,7 +346,8 @@ private struct TerminalTile: View {
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .overlay {
             RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(targeted ? Color.accentColor : state.needsAttention ? Color.orange : Color.primary.opacity(0.14), lineWidth: state.needsAttention || targeted ? 2 : 1)
+                .strokeBorder(targeted || store.activeTerminalID == tab.id ? Color.accentColor : state.needsAttention || runtime.needsAttention ? Color.orange : Color.primary.opacity(0.14),
+                              lineWidth: state.needsAttention || runtime.needsAttention || targeted || store.activeTerminalID == tab.id ? 2 : 1)
                 .allowsHitTesting(false)
         }
         .shadow(color: .black.opacity(0.12), radius: 7, y: 3)
@@ -326,7 +357,8 @@ private struct TerminalTile: View {
             return true
         } isTargeted: { targeted = $0 }
         .contextMenu {
-            Button("Open Session") { store.focusSession(tab.id) }
+            Button("Focus Terminal") { store.focusSession(tab.id) }
+            Button("Maximize Session") { store.maximizeSession(tab.id) }
             Button("Minimize") { store.minimizeSession(tab.id) }
             Divider()
             TabMenu(tab: tab, groupID: group.id)

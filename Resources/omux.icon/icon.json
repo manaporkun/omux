@@ -1,0 +1,50 @@
+{
+  "fill": "automatic",
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "5-prompt.svg",
+          "name": "prompt"
+        },
+        {
+          "image-name": "4-window.svg",
+          "name": "window"
+        },
+        {
+          "image-name-specializations": [
+            {
+              "value": "3-middle-glass.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "3-middle-glass-dark.svg"
+            }
+          ],
+          "name": "middle"
+        },
+        {
+          "image-name": "2-back-orange.svg",
+          "name": "back"
+        },
+        {
+          "image-name-specializations": [
+            {
+              "value": "1-grid.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "1-grid-dark.svg"
+            }
+          ],
+          "name": "grid"
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

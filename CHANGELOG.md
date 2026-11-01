@@ -2,6 +2,29 @@
 
 All notable changes to omux are listed here. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+
+- New terminals, project opening, and workspace recovery no longer start configured agents implicitly.
+  Existing persistent processes still reattach without duplicate startup. Start/Continue, Restart,
+  provider-specific creation, worktree creation, and recent conversations remain explicit launches.
+  Removed the Auto-resume preference; previously saved values no longer start agents.
+- Terminal clicks focus directly in the grid, preserving native selection and copy. Accessible
+  card-name controls provide the same focus action. Maximize and Restore Grid are explicit controls
+  with ⇧⌘M; ordinary Escape remains available to terminal applications.
+- Session commands identify their visible active target and disable for hidden/minimized selections.
+  Notification suppression and unread acknowledgment require actual terminal engagement; blocked,
+  error, and interrupted attention remain until resolved.
+
+### Fixed
+
+- Start and Restart can recover an owned tmux pane after its process dies, including when tmux
+  retains the pane without a PID. Dead panes remain visible to health checks and targeted cleanup;
+  ownership checks still reject foreign sessions.
+- Missing exact session names no longer fall back to tmux prefix matching. Terminal attachment,
+  scrollback capture, cleanup, and persistent service startup only target resolved session IDs.
+
 ## [0.8.0] - 2026-10-31
 
 ### Added
