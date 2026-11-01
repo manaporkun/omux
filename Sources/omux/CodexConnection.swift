@@ -32,7 +32,14 @@ enum CodexRequestID: Hashable {
 /// loopback listener; neither the token nor Codex credentials go in command arguments.
 @MainActor
 final class CodexConnection {
-    let token = UUID().uuidString + UUID().uuidString
+    let token: String
+    private let persistentHost: PersistentSessionHost?
+    private let tabID: UUID?
+    var tokenFile: URL? { tabID.flatMap { persistentHost?.tokenFile($0) } }
+    var serverIsRunning: Bool {
+        if let persistentHost, let tabID { return persistentHost.pane(tabID, server: true)?.dead == false }
+        return process?.isRunning == true
+    }
     private(set) var endpoint: String?
     private(set) var isReady = false
     var onMessage: (([String: Any]) -> Void)?
@@ -48,7 +55,12 @@ final class CodexConnection {
     private var retiring: [Process] = []
     private let environment: [String: String]?
 
-    init(environment: [String: String]? = nil) { self.environment = environment }
+    init(environment: [String: String]? = nil, persistentHost: PersistentSessionHost? = nil, tabID: UUID? = nil) {
+        self.environment = environment
+        self.persistentHost = persistentHost
+        self.tabID = tabID
+        token = tabID.flatMap { persistentHost?.loadLease($0)?.token } ?? UUID().uuidString + UUID().uuidString
+    }
 
     func connect() async throws {
         if let connecting { return try await connecting.value }
@@ -61,30 +73,46 @@ final class CodexConnection {
 
     private func open() async throws {
         try await waitForShutdown()
-        let port = try Self.availablePort()
-        let endpoint = "ws://127.0.0.1:\(port)"
+        let existing = tabID.flatMap { persistentHost?.pane($0, server: true) }
+        let saved = tabID.flatMap { persistentHost?.loadLease($0) }
+        let port: UInt16
+        let endpoint: String
+        if existing?.dead == false, let saved,
+           let url = URL(string: saved.endpoint), url.host == "127.0.0.1", url.scheme == "ws", let savedPort = url.port,
+           let validPort = UInt16(exactly: savedPort) {
+            port = validPort; endpoint = saved.endpoint
+        } else {
+            guard existing == nil || existing?.dead == true else { throw CodexError.unavailable }
+            port = try Self.availablePort(); endpoint = "ws://127.0.0.1:\(port)"
+        }
         self.endpoint = endpoint
         let digest = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
-        let child = Process()
-        child.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
-        child.arguments = ["-lc", "exec codex app-server --listen \(endpoint) --ws-auth capability-token --ws-token-sha256 \(digest) -c 'analytics.enabled=false'"]
+        let command = "exec codex app-server --listen \(endpoint) --ws-auth capability-token --ws-token-sha256 \(digest) -c 'analytics.enabled=false'"
         var env = environment ?? ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
-        child.environment = env
-        child.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
-        child.standardInput = FileHandle.nullDevice
-        child.standardOutput = FileHandle.nullDevice
-        child.standardError = FileHandle.nullDevice
-        child.terminationHandler = { [weak self] child in
-            Task { @MainActor in
-                // While connecting, open() sees the exit and reports .unavailable; closing here
-                // would cancel it into a bare CancellationError and report a disconnect.
-                guard let self, self.process === child, self.isReady else { return }
-                self.close(notify: true)
+        if let persistentHost, let tabID {
+            if existing?.dead != false {
+                try persistentHost.saveLease(.init(endpoint: endpoint, token: token), id: tabID)
+                try persistentHost.startServer(tabID, command: command, environment: env)
             }
+        } else {
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: env["SHELL"] ?? "/bin/zsh")
+            child.arguments = ["-lc", command]
+            child.environment = env
+            child.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            child.standardInput = FileHandle.nullDevice
+            child.standardOutput = FileHandle.nullDevice
+            child.standardError = FileHandle.nullDevice
+            child.terminationHandler = { [weak self] child in
+                Task { @MainActor in
+                    guard let self, self.process === child, self.isReady else { return }
+                    self.close(notify: true)
+                }
+            }
+            do { try child.run() } catch { throw CodexError.unavailable }
+            process = child
         }
-        do { try child.run() } catch { throw CodexError.unavailable }
-        process = child
 
         // Probe readiness before opening the authenticated WebSocket. Never send a
         // model prompt, create a thread, or alter authentication during connection.
@@ -92,7 +120,7 @@ final class CodexConnection {
             var ready = false
             for _ in 0..<80 {
                 try Task.checkCancellation()
-                guard child.isRunning else { throw CodexError.unavailable }
+                guard serverIsRunning else { throw CodexError.unavailable }
                 var probe = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/readyz")!)
                 probe.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                 probe.timeoutInterval = 0.3
@@ -121,14 +149,14 @@ final class CodexConnection {
                     }
                 } catch {
                     guard let self, self.socket === socket else { return }
-                    self.close(notify: true)
+                    self.close(notify: true, preserveServer: true)
                 }
             }
             _ = try await self.request("initialize", params: ["clientInfo": ["name": "omux", "title": "omux", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"]])
             try await send(["method": "initialized"])
             isReady = true
         } catch {
-            close(notify: false)
+            close(notify: false, preserveServer: true)
             throw error
         }
     }
@@ -177,13 +205,17 @@ final class CodexConnection {
         pending.removeValue(forKey: id)?.resume(with: result)
     }
 
-    func close(notify: Bool = false) {
+    func close(notify: Bool = false, preserveServer: Bool = false) {
         connecting?.cancel()
         reader?.cancel(); reader = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         let child = process
         process = nil
         if let child, child.isRunning { retiring.append(child); child.terminate() }
+        if !preserveServer, let persistentHost, let tabID {
+            persistentHost.destroy(tabID, server: true)
+            persistentHost.forgetLease(tabID)
+        }
         endpoint = nil
         isReady = false
         for id in Array(pending.keys) { finish(id, result: .failure(CodexError.disconnected)) }

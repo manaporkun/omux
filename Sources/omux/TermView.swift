@@ -317,15 +317,35 @@ struct TerminalHost: NSViewRepresentable {
 
     final class Coordinator { var currentID: UUID?; var wasFocused = false }
 
+    final class Container: NSView {
+        weak var terminal: TermView?
+        var focusRequested = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            focusIfReady()
+        }
+
+        func focusIfReady() {
+            guard focusRequested, window != nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.focusRequested, let terminal = self.terminal,
+                      terminal.superview === self, let window = self.window, window.attachedSheet == nil else { return }
+                if window.makeFirstResponder(terminal) { self.focusRequested = false }
+            }
+        }
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSView {
-        let container = NSView()
+    func makeNSView(context: Context) -> Container {
+        let container = Container()
         container.wantsLayer = true
         return container
     }
 
-    func updateNSView(_ container: NSView, context: Context) {
+    func updateNSView(_ container: Container, context: Context) {
+        container.terminal = termView
         container.layer?.backgroundColor = theme.background.cgColor
         let changed = context.coordinator.currentID != termView.tabID || termView.superview !== container
         if changed {
@@ -335,12 +355,9 @@ struct TerminalHost: NSViewRepresentable {
             termView.autoresizingMask = [.width, .height]
             container.addSubview(termView)
         }
-        if isFocused && (changed || !context.coordinator.wasFocused) {
-            DispatchQueue.main.async {
-                guard termView.superview === container else { return }
-                termView.window?.makeFirstResponder(termView)
-            }
-        }
+        if !isFocused { container.focusRequested = false }
+        else if changed || !context.coordinator.wasFocused { container.focusRequested = true }
+        container.focusIfReady()
         context.coordinator.wasFocused = isFocused
     }
 }

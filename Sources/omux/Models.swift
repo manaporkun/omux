@@ -170,6 +170,8 @@ struct TabRuntime: Equatable {
     var statusKind: String?
     /// OSC 7501 records other than the root, e.g. Claude Code's subagents.
     var statusChildren: [StatusChild] = []
+    /// A previously managed process vanished (e.g. after reboot); never replay its work automatically.
+    var interrupted = false
 
     enum StatusState: String { case idle, working, done, blocked, error }
 
@@ -228,7 +230,9 @@ enum Persistence {
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         // A beta build (./build.sh --beta) keeps its own workspace next to the release one.
-        let name = Persistence.isWorkspacePreview ? "omux-workspace-preview" : Persistence.isBeta ? "omux-beta" : "omux"
+        let persistentPreview = Bundle.main.bundleIdentifier?.contains(".persistence.") == true
+        let previewName = persistentPreview ? "omux-persistent-workspace-preview" : "omux-workspace-preview"
+        let name = Persistence.isWorkspacePreview ? previewName : Persistence.isBeta ? "omux-beta" : "omux"
         let dir = base.appendingPathComponent(name, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

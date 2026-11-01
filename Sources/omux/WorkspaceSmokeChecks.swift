@@ -17,6 +17,8 @@ enum WorkspaceSmokeChecks {
                       group.tabs.allSatisfy({ $0.resolvedProvider(in: group) == .shell }) else {
                     throw CheckError.failed("Smoke checks require at least three disposable shell sessions")
                 }
+                store.showAllWindows()
+                try await Task.sleep(for: .milliseconds(200))
                 let first = group.tabs[0], second = group.tabs[1]
                 let firstView = store.terminal(for: first.id), secondView = store.terminal(for: second.id)
                 guard let firstView, let secondView else { throw CheckError.failed("Missing terminal views") }
@@ -43,7 +45,10 @@ enum WorkspaceSmokeChecks {
                     charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53
                 ) { NSApp.postEvent(escape, atStart: false) }
                 try await Task.sleep(for: .milliseconds(350))
-                guard store.canvas.maximizedID == nil else { throw CheckError.failed("Escape did not return to the grid") }
+                guard store.canvas.maximizedID == nil else {
+                    let responder = secondView.window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+                    throw CheckError.failed("Escape did not return to the grid (responder: \(responder), app active: \(NSApp.isActive))")
+                }
                 guard secondView.window?.firstResponder !== secondView else {
                     throw CheckError.failed("Grid retained terminal keyboard focus")
                 }

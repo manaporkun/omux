@@ -54,6 +54,14 @@ final class Store: ObservableObject {
     private var browsers: [UUID: BrowserSession] = [:]
 
     private var terminals: [UUID: TermView] = [:]
+    private let sessionHost = PersistentSessionHost.shared
+    private var hostedSessions: Set<UUID> = []
+    private var sessionWatches: [UUID: DispatchSourceFileSystemObject] = [:]
+    private var statusVersions: [UUID: Date] = [:]
+    private var queryVersions: [UUID: Date] = [:]
+    private var hostTimer: Timer?
+    private var warnedAboutHost = false
+    private var terminating = false
     private var codexStarts: [UUID: Task<Void, Never>] = [:]
     /// Sessions whose startup command is about to be typed; Start would type it a second time.
     private var pendingCommands: [UUID: UUID] = [:]
@@ -129,7 +137,15 @@ final class Store: ObservableObject {
             startAllSessions()
         } else {
             // Restored tabs stay dormant until selected (shell) or played (claude).
-            for entry in allTabs { runtime[entry.tab.id] = TabRuntime(exited: true) }
+            let running = sessionHost.panes()
+            for entry in allTabs {
+                let interrupted = sessionHost.hasRecord(entry.tab.id) && running[entry.tab.id]?.dead != false
+                runtime[entry.tab.id] = TabRuntime(exited: true, interrupted: interrupted)
+            }
+            startAllSessions(existingOnly: true)
+        }
+        hostTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshHostedSessions() }
         }
     }
 
@@ -181,8 +197,9 @@ final class Store: ObservableObject {
                             command: UserDefaults.standard.bool(forKey: Prefs.autoResume) ? nil : "")
     }
 
-    private func startAllSessions() {
-        let all = allTabs
+    private func startAllSessions(existingOnly: Bool = false) {
+        let existing = existingOnly ? sessionHost.panes() : [:]
+        let all = existingOnly ? allTabs.filter { existing[$0.tab.id] != nil } : allTabs
         let ordered = all.filter { $0.tab.id == selectedTabID } + all.filter { $0.tab.id != selectedTabID }
         var delay: TimeInterval = 0
         for entry in ordered {
@@ -243,17 +260,44 @@ final class Store: ObservableObject {
         // Lets a worktree's setup reach the main checkout, e.g. `cp "$OMUX_REPO/.env" .`.
         if let worktree = tab.worktree { env["OMUX_REPO"] = worktree.repo }
 
-        view.startProcess(
-            executable: shell,
-            args: ["-l"],
-            environment: env.map { "\($0.key)=\($0.value)" },
-            execName: "-" + (shell as NSString).lastPathComponent,
-            currentDirectory: dir
-        )
+        let attachment: PersistentSessionHost.Attachment?
+        do {
+            if sessionHost.enabled || sessionHost.hasRecord(tab.id) || sessionHost.pane(tab.id) != nil {
+                attachment = try sessionHost.ensure(tab.id, cwd: dir, shell: shell, environment: env)
+                hostedSessions.insert(tab.id)
+                if attachment?.reused == true {
+                    let history = sessionHost.capture(tab.id)
+                    if !history.isEmpty { view.feed(text: history.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n") }
+                }
+                view.startProcess(executable: sessionHost.binary!,
+                                  args: sessionHost.arguments + ["attach-session", "-t", sessionHost.target(tab.id)],
+                                  environment: env.map { "\($0.key)=\($0.value)" }, currentDirectory: dir)
+            } else {
+                attachment = nil
+                if sessionHost.requested && !warnedAboutHost {
+                    warnedAboutHost = true
+                    Notices.shared.post("Sessions will stop when omux closes",
+                                        detail: sessionHost.binary == nil ? "Install tmux to enable persistent sessions." : "The session relay is missing. Rebuild the app to enable persistence.", isError: true)
+                }
+                view.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
+                                  execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: dir)
+            }
+        } catch {
+            update(tab.id) { $0.provider = provider; $0.exited = true; $0.statusState = .error; $0.statusDetail = error.localizedDescription }
+            return
+        }
         update(tab.id) {
             $0.provider = provider; $0.agentConnected = false
             $0.exited = false; $0.cwd = dir; $0.title = ""
             $0.statusState = nil; $0.statusKind = nil; $0.statusDetail = nil; $0.statusChildren = []
+            $0.interrupted = attachment?.needsResume == true
+        }
+        if attachment != nil { watchHostedSession(tab.id, view: view) }
+        if attachment?.needsResume == true { return }
+        if attachment?.reused == true {
+            if provider == .codex { startCodex(view, tab: tab, cwd: dir, reattach: true) }
+            else { refreshBusy(tab.id) }
+            return // Never type a second startup command into an existing session.
         }
 
         // A tab without a project folder (or whose folder is gone) opens in the home folder;
@@ -277,8 +321,12 @@ final class Store: ObservableObject {
         }
     }
 
-    private func startCodex(_ view: TermView, tab: TabItem, cwd: String) {
+    private func startCodex(_ view: TermView, tab: TabItem, cwd: String, reattach: Bool = false) {
         guard codexStarts[tab.id] == nil else { return }
+        if reattach && (tab.codexThreadID == nil || sessionHost.pane(tab.id, server: true)?.dead != false) {
+            update(tab.id) { $0.busy = false; $0.statusState = .error; $0.statusDetail = "The Codex server stopped. Restart this session to resume its saved conversation." }
+            return
+        }
         update(tab.id) { $0.busy = true; $0.statusState = .working; $0.statusDetail = "Connecting to Codex…" }
         codexStarts[tab.id] = Task { [weak self, weak view] in
             defer {
@@ -291,8 +339,10 @@ final class Store: ObservableObject {
                 self.updateTab(tab.id) { $0.codexThreadID = launch.threadID }
                 self.save()
                 self.update(tab.id) { $0.agentConnected = true; $0.busy = false }
-                let setup = self.codexSetup.removeValue(forKey: tab.id)
-                view.send(txt: (setup.map { Self.afterSetup($0, launch.command) } ?? launch.command) + "\n")
+                if !reattach {
+                    let setup = self.codexSetup.removeValue(forKey: tab.id)
+                    view.send(txt: (setup.map { Self.afterSetup($0, launch.command) } ?? launch.command) + "\n")
+                }
             } catch {
                 guard !Task.isCancelled, let self, let view, self.terminals[tab.id] === view else { return }
                 self.update(tab.id) { $0.busy = false; $0.statusState = .error; $0.statusDetail = error.localizedDescription }
@@ -307,6 +357,11 @@ final class Store: ObservableObject {
 
     /// Kills the shell and everything it spawned (claude, node, …), not just the shell.
     private func killTree(_ view: TermView) {
+        if hostedSessions.remove(view.tabID) != nil {
+            sessionWatches.removeValue(forKey: view.tabID)?.cancel()
+            statusVersions[view.tabID] = nil; queryVersions[view.tabID] = nil
+            sessionHost.reset(view.tabID)
+        }
         let pid = view.process.shellPid
         if pid > 0 { Darwin.kill(-pid, SIGHUP) }
         view.terminate()
@@ -408,10 +463,10 @@ final class Store: ObservableObject {
     }
 
     /// Re-checks whether the shell has a child process (claude, a build, …).
-    func refreshBusy(_ id: UUID) {
+    func refreshBusy(_ id: UUID, panePID: pid_t? = nil, knownBusy: Bool? = nil) {
         guard let view = terminals[id], !(runtime[id]?.exited ?? true) else { return }
-        let pid = view.process.shellPid
-        let busy = pid > 0 && Self.hasChildProcess(of: pid)
+        let pid = panePID ?? (hostedSessions.contains(id) ? sessionHost.pane(id)?.pid ?? 0 : view.process.shellPid)
+        let busy = knownBusy ?? (pid > 0 && Self.hasChildProcess(of: pid))
         if runtime[id]?.provider == .codex {
             guard codexStarts[id] == nil else { return }
             if !busy { update(id) { $0.agentConnected = false; $0.busy = false } }
@@ -420,28 +475,44 @@ final class Store: ObservableObject {
         update(id) { $0.busy = busy }
     }
 
-    private static func hasChildProcess(of pid: pid_t) -> Bool {
+    private static func hasChildProcess(of pid: pid_t) -> Bool { parentProcessIDs().contains(pid) }
+
+    private static func parentProcessIDs() -> Set<pid_t> {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
         var size = 0
-        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return false }
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
         var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride + 8)
         size = procs.count * MemoryLayout<kinfo_proc>.stride
-        guard sysctl(&mib, 4, &procs, &size, nil, 0) == 0 else { return false }
-        return procs.prefix(size / MemoryLayout<kinfo_proc>.stride).contains { $0.kp_eproc.e_ppid == pid }
+        guard sysctl(&mib, 4, &procs, &size, nil, 0) == 0 else { return [] }
+        return Set(procs.prefix(size / MemoryLayout<kinfo_proc>.stride).map { $0.kp_eproc.e_ppid })
     }
 
     /// Starts the selected provider in an idle shell or resumes its exact saved chat.
     func start(_ id: UUID) {
         guard let loc = location(of: id), pendingCommands[id] == nil else { return }
         let tab = groups[loc.group].tabs[loc.tab]
+        if runtime[id]?.exited == true, let pane = sessionHost.pane(id), !pane.dead {
+            sessionWatches.removeValue(forKey: id)?.cancel()
+            terminals.removeValue(forKey: id)?.removeFromSuperview()
+            makeTerminal(tab: tab, group: groups[loc.group])
+            objectWillChange.send()
+            return
+        }
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
             if runtime[id]?.provider == .codex, runtime[id]?.statusState == .error,
                !CodexManager.shared.isConnected(id) {
-                restart(id)
+                if hostedSessions.contains(id), sessionHost.pane(id, server: true)?.dead == false {
+                    startCodex(view, tab: tab, cwd: runtime[id]?.cwd ?? NSHomeDirectory(), reattach: true)
+                } else { restart(id) }
                 return
             }
-            guard !Self.hasChildProcess(of: view.process.shellPid), codexStarts[id] == nil else { return }
+            let pid = hostedSessions.contains(id) ? sessionHost.pane(id)?.pid ?? 0 : view.process.shellPid
+            guard !Self.hasChildProcess(of: pid), codexStarts[id] == nil else { return }
             if runtime[id]?.provider != tab.resolvedProvider(in: groups[loc.group]) { restart(id); return }
+        }
+        if runtime[id]?.interrupted == true {
+            try? sessionHost.setNeedsResume(false, id: id)
+            update(id) { $0.interrupted = false; $0.statusState = nil; $0.statusDetail = nil }
         }
         if tab.resolvedProvider(in: groups[loc.group]) != .claude {
             if let view = terminals[id], !(runtime[id]?.exited ?? true) {
@@ -577,7 +648,13 @@ final class Store: ObservableObject {
         case .directory(let dir):
             update(id) { $0.cwd = dir }
         case .exited:
-            update(id) { $0.exited = true; $0.statusState = nil; $0.statusKind = nil; $0.statusChildren = []; $0.busy = false }
+            guard !terminating else { return }
+            let alive = hostedSessions.contains(id) && sessionHost.pane(id)?.dead == false
+            update(id) {
+                $0.exited = true; $0.statusState = alive ? .error : nil
+                $0.statusDetail = alive ? "Terminal disconnected; the session is still running. Press Start to reconnect." : nil
+                $0.statusKind = nil; $0.statusChildren = []; $0.busy = false
+            }
         case .openPath(let path):
             previewRequest = path
         case .status(let state, let kind, let message, let children):
@@ -878,12 +955,77 @@ final class Store: ObservableObject {
         terminals.values.forEach { $0.apply(theme) }
     }
 
-    /// Saves the layout and kills every session's process tree, running or not.
+    /// Disconnects persistent terminals; only explicitly closing a session kills its process.
     func prepareForTermination() {
         save()
+        terminating = true
+        hostTimer?.invalidate()
+        sessionWatches.values.forEach { $0.cancel() }
+        sessionWatches = [:]
         codexStarts.values.forEach { $0.cancel() }
-        CodexManager.shared.shutdown()
-        terminals.values.forEach(killTree)
+        CodexManager.shared.shutdown(keepServers: true)
+        for (id, view) in terminals {
+            view.onEvent = nil
+            if hostedSessions.contains(id) { view.terminate() }
+            else { killTree(view) }
+        }
+    }
+
+    var persistentSessionCount: Int {
+        hostedSessions.filter { sessionHost.pane($0)?.dead == false }.count
+    }
+
+    private func watchHostedSession(_ id: UUID, view: TermView) {
+        sessionWatches.removeValue(forKey: id)?.cancel()
+        statusVersions[id] = nil; queryVersions[id] = nil
+        let since = Date()
+        let descriptor = Darwin.open(sessionHost.folder(id).path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: [.write, .rename], queue: .main)
+        watcher.setEventHandler { [weak self, weak view] in
+            guard let self, let view, self.terminals[id] === view else { return }
+            self.readHostedStatus(id, view: view, queriesSince: since)
+        }
+        watcher.setCancelHandler { Darwin.close(descriptor) }
+        sessionWatches[id] = watcher
+        watcher.resume()
+        readHostedStatus(id, view: view, queriesSince: since)
+    }
+
+    private func readHostedStatus(_ id: UUID, view: TermView, queriesSince: Date) {
+        let file = sessionHost.statusFile(id)
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+           let modified = attributes[.modificationDate] as? Date, statusVersions[id] != modified,
+           let size = attributes[.size] as? NSNumber, size.intValue <= 1_500_000,
+           let data = try? Data(contentsOf: file), let packets = try? JSONDecoder().decode([Data].self, from: data) {
+            statusVersions[id] = modified
+            var feed = Data("\u{1b}]7501;state=clear\u{7}".utf8)
+            for packet in packets.prefix(256) where packet.count <= 4096 { feed.append(packet) }
+            view.feed(byteArray: Array(feed)[...])
+        }
+        let query = sessionHost.folder(id).appendingPathComponent("query.osc")
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: query.path),
+           let modified = attributes[.modificationDate] as? Date, modified > queriesSince, queryVersions[id] != modified,
+           let data = try? Data(contentsOf: query), data.count <= 32 {
+            queryVersions[id] = modified
+            // Stale capability queries from before this attachment are never replayed.
+            view.feed(byteArray: Array(data)[...])
+        }
+    }
+
+    private func refreshHostedSessions() {
+        guard !terminating else { return }
+        guard !hostedSessions.isEmpty else { return }
+        let panes = sessionHost.panes()
+        let parents = Self.parentProcessIDs()
+        for id in hostedSessions {
+            if let pane = panes[id], !pane.dead {
+                if let cwd = pane.cwd { update(id) { $0.cwd = cwd } }
+                if runtime[id]?.exited == false { refreshBusy(id, panePID: pane.pid, knownBusy: parents.contains(pane.pid)) }
+            } else if runtime[id]?.exited == false {
+                update(id) { $0.exited = true; $0.busy = false; $0.agentConnected = false; $0.statusState = nil }
+            }
+        }
     }
 }
 
@@ -909,8 +1051,9 @@ extension Store {
     }
 
     func showAllWindows() {
+        let terminal = canvas.maximizedID.flatMap { terminals[$0] }
         canvas.maximizedID = nil
-        if NSApp.keyWindow?.firstResponder is TermView { NSApp.keyWindow?.makeFirstResponder(nil) }
+        if let terminal, terminal.window?.firstResponder === terminal { terminal.window?.makeFirstResponder(nil) }
     }
 
     func minimizeSession(_ id: UUID) {

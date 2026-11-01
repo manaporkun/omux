@@ -35,6 +35,7 @@ APP="build/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/omux "$APP/Contents/MacOS/omux"
+cp .build/release/omux-session-relay "$APP/Contents/MacOS/omux-session-relay"
 cp Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" -c "Set :CFBundleName $NAME" \
   -c "Set :NSServices:0:NSMenuItem:default Open in $NAME" -c "Set :NSServices:0:NSPortName $NAME" "$APP/Contents/Info.plist"
@@ -54,6 +55,7 @@ without() { grep -v "$@" || true; }
 # notarization accept them. $1 identity, remaining args extra codesign options.
 sign_sparkle() {
   local identity=$1; shift
+  codesign --force --sign "$identity" "$@" "$APP/Contents/MacOS/omux-session-relay"
   local fw="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
   for item in "$fw/XPCServices/Installer.xpc" "$fw/XPCServices/Downloader.xpc" "$fw/Autoupdate" "$fw/Updater.app"; do
     codesign --force --sign "$identity" --preserve-metadata=entitlements "$@" "$item" 2>&1 | without "replacing existing signature"

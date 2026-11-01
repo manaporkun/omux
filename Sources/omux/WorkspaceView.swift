@@ -212,7 +212,7 @@ struct SessionStateDot: View {
     var color: Color {
         switch state {
         case .working, .running: return .blue
-        case .needsYou: return .orange
+        case .needsYou, .interrupted: return .orange
         case .error: return .red
         case .idle, .ended: return .secondary
         }
@@ -292,6 +292,15 @@ private struct TerminalTile: View {
                         .accessibilityAddTraits(.isButton)
                         .help("Click to work with this session")
                 }
+            if runtime.interrupted || runtime.exited {
+                HStack {
+                    Text(runtime.interrupted ? "Previous process ended" : "Session ended").foregroundStyle(.secondary)
+                    Spacer()
+                    Button(runtime.interrupted ? "Resume" : "Start") { store.start(tab.id) }
+                }
+                .font(.system(size: 10)).padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color(nsColor: theme.chrome))
+            }
             if runtime.awaitsPermission {
                 HStack(spacing: 8) {
                     Image(systemName: "hand.raised").foregroundStyle(.orange)

@@ -19,6 +19,7 @@ let package = Package(
             // build.sh embeds Sparkle.framework in the app bundle; the binary finds it there.
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
+        .executableTarget(name: "omux-session-relay", path: "Sources/SessionRelay"),
         .testTarget(name: "omuxTests", dependencies: ["omux"]),
     ],
     swiftLanguageModes: [.v5]

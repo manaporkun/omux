@@ -28,6 +28,7 @@ enum Prefs {
     static let usageInterval = "usageInterval"
     static let theme = "theme"
     static let autoResume = "autoResume"
+    static let persistentSessions = "persistentSessions"
     static let showFiles = "showFiles"
     static let filesByDate = "filesByDate"
     static let filesBrowserCollapsed = "filesBrowserCollapsed"
@@ -44,7 +45,7 @@ enum Prefs {
     static let notifySound = "notifySound"
     static let welcomed = "welcomed"
 
-    static let all = [confirmQuit, showFolderPath, usageInterval, theme, autoResume, showFiles, filesByDate,
+    static let all = [confirmQuit, showFolderPath, usageInterval, theme, autoResume, persistentSessions, showFiles, filesByDate,
                       filesBrowserCollapsed, previewWrapLines, panelTab, fontFamily, fontSize,
                       notifyNeedsYou, notifyDone, notifyPrograms]
 
@@ -69,6 +70,7 @@ struct SettingsView: View {
     @AppStorage(Prefs.fontFamily) private var fontFamily = ""
     @AppStorage(Prefs.fontSize) private var fontSize = Fonts.defaultSize
     @AppStorage(Prefs.autoResume) private var autoResume = false
+    @AppStorage(Prefs.persistentSessions) private var persistentSessions = true
     @AppStorage(Prefs.notifyStyle) private var notifyStyle = "banner"
     @AppStorage(Prefs.notifySound) private var notifySound = "Default"
     @AppStorage(Prefs.previewWrapLines) private var wrapLines = true
@@ -102,11 +104,14 @@ struct SettingsView: View {
             }
             Section("Sessions") {
                 Toggle("Auto-resume agent sessions at launch", isOn: $autoResume)
-                Text("Off: restored sessions stay stopped until you press ▶. Clicking one only opens its shell.")
+                Text("Existing persistent sessions always reconnect. This controls starting new agents when no running session exists.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Keep sessions running when omux closes", isOn: $persistentSessions)
+                Text("Requires tmux. Applies to new sessions; existing persistent sessions reconnect without restarting their agents.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Confirm before quitting while sessions are running", isOn: $confirmQuit)
-                Text("Quitting stops every session. Saved Claude Code and Codex conversations can be continued on the next launch.")
+                Text("Persistent sessions keep working after quitting. Other sessions stop; saved agent conversations can be resumed later.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -431,6 +436,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = Updater.shared
         #if DEBUG
         WorkspaceSmokeChecks.runIfRequested()
+        PersistenceSmokeChecks.runIfRequested()
         #endif
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == 53,
@@ -477,7 +483,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if confirm, running > 0 {
             let alert = NSAlert()
             alert.messageText = "Quit omux?"
-            alert.informativeText = "\(running) session\(running == 1 ? " is" : "s are") running. Agent conversation IDs are saved so you can continue them next launch."
+            let persistent = store.persistentSessionCount
+            alert.informativeText = "\(persistent) persistent session\(persistent == 1 ? " will" : "s will") keep running. \(max(0, running - persistent)) other session(s) will stop. Saved conversations can be resumed later."
             alert.addButton(withTitle: "Quit")
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }

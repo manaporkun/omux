@@ -1,7 +1,7 @@
 # omux
 
 This fork adds a native project workspace: live terminal grid, maximize/back, a session shelf,
-and cross-project attention navigation. See [workspace development and current scope](docs/workspace.md).
+cross-project attention navigation, and persistent tmux-backed sessions. See [workspace development and current scope](docs/workspace.md).
 
 **A 5 MB native Mac terminal for running fleets of coding agents.**
 

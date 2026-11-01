@@ -71,7 +71,9 @@ final class CodexManager: ObservableObject {
 
     func connection(for tabID: UUID) -> CodexConnection {
         if let connection = connections[tabID] { return connection }
-        let connection = CodexConnection()
+        let host = PersistentSessionHost.shared
+        let persistent = host.enabled || host.hasRecord(tabID) || host.pane(tabID) != nil
+        let connection = CodexConnection(persistentHost: persistent ? host : nil, tabID: tabID)
         connections[tabID] = connection
         connection.onMessage = { [weak self] in self?.receive($0, owner: tabID) }
         connection.onDisconnect = { [weak self] in
@@ -110,7 +112,8 @@ final class CodexManager: ObservableObject {
             publish(id, decoded)
         }
         Task { await refreshUsage() }
-        let command = "codex resume --remote \(Git.quote(endpoint)) --remote-auth-token-env OMUX_CODEX_TOKEN --no-alt-screen \(Git.quote(id))"
+        let prefix = connection.tokenFile.map { "export OMUX_CODEX_TOKEN; IFS= read -r OMUX_CODEX_TOKEN < " + Git.quote($0.path) + " && " } ?? ""
+        let command = prefix + "codex resume --remote \(Git.quote(endpoint)) --remote-auth-token-env OMUX_CODEX_TOKEN --no-alt-screen \(Git.quote(id))"
         return (id, command)
     }
 
@@ -162,8 +165,8 @@ final class CodexManager: ObservableObject {
         approvals[thread] = nil; status[thread] = nil; turns[thread] = nil
     }
 
-    func shutdown() {
-        connections.values.forEach { $0.close() }
+    func shutdown(keepServers: Bool = false) {
+        connections.values.forEach { $0.close(preserveServer: keepServers) }
         connections = [:]
         catalog.close()
     }

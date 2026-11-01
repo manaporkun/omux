@@ -90,4 +90,13 @@ final class WorkspaceLayoutTests: XCTestCase {
         XCTAssertEqual(CanvasSessionState(TabRuntime(exited: true, statusState: .working)), .ended)
         XCTAssertTrue(CanvasFilter.idle.includes(.ended))
     }
+    func testInterruptedProcessNeedsAttentionWithoutBeingReportedAsWorking() {
+        let state = CanvasSessionState(TabRuntime(exited: true, interrupted: true))
+        XCTAssertEqual(state, .interrupted)
+        XCTAssertTrue(state.needsAttention)
+        XCTAssertTrue(CanvasFilter.needsYou.includes(state))
+        XCTAssertTrue(CanvasFilter.idle.includes(state))
+        XCTAssertFalse(CanvasFilter.working.includes(state))
+    }
+
 }

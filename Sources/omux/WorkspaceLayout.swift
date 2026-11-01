@@ -75,7 +75,7 @@ struct TerminalGridLayout: Equatable {
 }
 
 enum CanvasSessionState: String, CaseIterable {
-    case working, needsYou, idle, error, running, ended
+    case working, needsYou, idle, error, running, ended, interrupted
     var label: String {
         switch self {
         case .working: return "Working"
@@ -84,13 +84,15 @@ enum CanvasSessionState: String, CaseIterable {
         case .error: return "Error"
         case .running: return "Running"
         case .ended: return "Ended"
+        case .interrupted: return "Interrupted"
         }
     }
-    var needsAttention: Bool { self == .needsYou || self == .error }
+    var needsAttention: Bool { self == .needsYou || self == .error || self == .interrupted }
 
     init(_ runtime: TabRuntime) {
-        if runtime.exited { self = .ended }
+        if runtime.interrupted { self = .interrupted }
         else if runtime.statusState == .error { self = .error }
+        else if runtime.exited { self = .ended }
         else if runtime.statusState == .blocked { self = .needsYou }
         else if runtime.statusState == .working { self = .working }
         else if runtime.statusState == .done || runtime.statusState == .idle { self = .idle }
@@ -110,7 +112,7 @@ enum CanvasFilter: String, CaseIterable, Identifiable {
         case .all: return true
         case .needsYou: return state.needsAttention
         case .working: return state == .working || state == .running
-        case .idle: return state == .idle || state == .ended
+        case .idle: return state == .idle || state == .ended || state == .interrupted
         }
     }
 }
