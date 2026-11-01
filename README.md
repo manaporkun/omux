@@ -34,12 +34,13 @@ omux turns that into a dashboard.
 | Feature | What it does |
 | --- | --- |
 | **Projects and sessions** | A project is a folder plus a default agent. Sessions live under it in the sidebar: drag to reorder, rename, color, move between projects. |
-| **Conversations that resume** | Each Claude Code session keeps its session ID and each Codex session its thread, so Restart and relaunch reopen the exact conversation. |
+| **Conversations that resume** | Each Claude Code session keeps its session ID and each Codex session its thread. Explicit recovery reopens saved history; relaunch does not automatically replay agent work. |
 | **Live status** | Working, needs you or done, per session. The Dock badge counts sessions waiting on you, and a notification brings you to the right one. |
 | **Allow or deny from the sidebar** | Claude Code tool permissions and Codex approvals answered without switching sessions. Deny lets you tell the agent what to do instead. |
 | **Subagents** | Every subagent of Claude Code or Codex listed with its current tool. Click one to read its transcript. |
 | **Worktree sessions** (⌥⌘T) | A session on its own branch and folder, so parallel agents never touch each other's files. A per-project setup command runs first, like `cp "$OMUX_REPO/.env" . && npm install`. |
 | **Pull request status** | With the [GitHub CLI](https://cli.github.com): checks, reviews and merges next to the session. Failing checks' logs sent to the agent in one click. Merged pull requests offer to clean up the worktree. |
+| **Safe folder recovery and cleanup** | Missing folders offer Locate folder or an explicit home shell, never a silent agent fallback. Failed worktree cleanup retains its stopped card with retry/reveal actions until resolved. |
 | **Changes** (⌥⌘2) | The session's diff against its base branch. Click a line to leave a note, then send all notes to the agent in one message. |
 | **Files** (⌥⌘1) | The session's folder, with previews of code, Markdown, images, PDFs and anything Quick Look shows. ⌘-click a path in the terminal to preview it. |
 | **Browser** (⌥⌘3) | A web view per session that opens the local server the session prints. Pick an element to send its HTML, styles and a screenshot to the prompt. |

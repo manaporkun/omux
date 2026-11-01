@@ -25,7 +25,7 @@ extension Store {
             let path = Git.worktreePath(repo: repo, branch: branch)
             await MainActor.run {
                 guard result.ok else { completion(result.message); return }
-                var tab = TabItem(name: name, directory: path, worktree: Worktree(branch: branch, base: base, repo: repo))
+                var tab = TabItem(name: name, directory: path, worktree: Worktree(branch: branch, base: base, repo: repo, path: path))
                 tab.provider = provider
                 tab.command = provider?.command
                 let setup = self.groups.first { $0.id == groupID }?.worktreeSetup
@@ -37,17 +37,28 @@ extension Store {
 
     /// ⌘W: a worktree session asks whether to keep its worktree; others close at once.
     func requestClose(_ id: UUID) {
-        guard let tab = tab(id), let worktree = tab.worktree, let path = directory(of: tab),
-              FileManager.default.fileExists(atPath: path) else {
+        if tab(id)?.worktreeCleanup != nil {
+            sessionDetailsID = id
+            Self.showInfo("Worktree cleanup is unfinished", "The workspace entry is retained until cleanup succeeds. Use Retry Cleanup or reveal the saved folder and branch in Session Details.")
+            return
+        }
+        guard let tab = tab(id), let worktree = tab.worktree else {
             closeTab(id)
             return
         }
-        let dirty = Git.run(["status", "--porcelain"], in: path).out.split(separator: "\n").count
+        let path = Git.originalWorktreePath(worktree)
+        guard FileManager.default.fileExists(atPath: path) else {
+            closeTab(id)
+            return
+        }
+        let status = Git.run(["status", "--porcelain"], in: path)
+        let dirty = status.out.split(separator: "\n").count
         // nil when git can't compare, e.g. the base branch was deleted or renamed: unknown, not zero.
         let ahead = Int(Git.run(["rev-list", "--count", "\(worktree.base)..\(worktree.branch)"], in: worktree.repo).out
             .trimmingCharacters(in: .whitespacesAndNewlines))
         var facts: [String] = []
         if dirty > 0 { facts.append("\(dirty) uncommitted file\(dirty == 1 ? "" : "s")") }
+        if !status.ok { facts.append("uncommitted files that couldn't be inspected") }
         if let ahead, ahead > 0 { facts.append("\(ahead) commit\(ahead == 1 ? "" : "s") not in \(worktree.base)") }
         if ahead == nil { facts.append("commits that couldn't be compared with \(worktree.base)") }
 
@@ -57,11 +68,13 @@ extension Store {
             // A squash or rebase merge leaves the branch's commits "not in" the base.
             alert.informativeText = "Its pull request #\(pr.number) was merged."
                 + (dirty > 0 ? " The worktree has \(dirty) uncommitted file\(dirty == 1 ? "" : "s")." : "")
+                + (!status.ok ? " Uncommitted files couldn't be inspected." : "")
         } else {
             alert.informativeText = facts.isEmpty
                 ? "Its worktree on “\(worktree.branch)” has nothing that isn't already in \(worktree.base)."
                 : "Its worktree on “\(worktree.branch)” has \(facts.joined(separator: " and "))."
         }
+        alert.informativeText += Self.permanentWorktreeDeletionWarning(path: path)
         alert.addButton(withTitle: "Keep Worktree")
         let delete = alert.addButton(withTitle: "Delete Worktree and Branch")
         delete.hasDestructiveAction = true
@@ -70,7 +83,7 @@ extension Store {
         case .alertFirstButtonReturn:
             closeTab(id)
         case .alertSecondButtonReturn:
-            closeAndDeleteWorktree(id, worktree: worktree, path: path)
+            beginConfirmedWorktreeCleanup(id)
         default:
             break
         }
@@ -79,46 +92,153 @@ extension Store {
     /// Offered once the session's pull request is merged: closes the session and deletes
     /// its worktree and local branch.
     func cleanUpMergedWorktree(_ id: UUID) {
-        guard let tab = tab(id), let worktree = tab.worktree, let path = directory(of: tab),
-              FileManager.default.fileExists(atPath: path) else { return }
-        let dirty = Git.run(["status", "--porcelain"], in: path).out.split(separator: "\n").count
+        guard let tab = tab(id), tab.worktreeCleanup == nil, let worktree = tab.worktree else { return }
+        let path = Git.originalWorktreePath(worktree)
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        let status = Git.run(["status", "--porcelain"], in: path)
+        let dirty = status.out.split(separator: "\n").count
         let number = PullRequestMonitor.shared.requests[id].map { " in #\($0.number)" } ?? ""
 
         let alert = NSAlert()
         alert.messageText = "Delete the worktree for “\(tab.name)”?"
         alert.informativeText = "“\(worktree.branch)” was merged\(number). This closes the session and deletes its worktree and local branch."
             + (dirty > 0 ? " \(dirty) uncommitted file\(dirty == 1 ? "" : "s") will be lost." : "")
+            + (!status.ok ? " Uncommitted files couldn't be inspected." : "")
+            + Self.permanentWorktreeDeletionWarning(path: path)
         let delete = alert.addButton(withTitle: "Delete Worktree and Branch")
         delete.hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        closeAndDeleteWorktree(id, worktree: worktree, path: path)
+        beginConfirmedWorktreeCleanup(id)
     }
 
-    private func closeAndDeleteWorktree(_ id: UUID, worktree: Worktree, path: String) {
-        Task {
-            do {
-                if let tab = tab(id), provider(of: tab) == .codex {
-                    try await CodexManager.shared.detach(id)
-                }
-                closeTab(id)
-                deleteWorktree(worktree, path: path)
-            } catch { Self.showError("Couldn't stop the Codex session", error.localizedDescription) }
+    private static func permanentWorktreeDeletionWarning(path: String) -> String {
+        "\n\nDeleting permanently removes the worktree folder at \(path), all uncommitted changes and files (including ignored files), and its local branch. There is no filesystem Undo in omux."
+    }
+
+    /// Called only after the permanent-deletion warning was explicitly accepted.
+    private func beginConfirmedWorktreeCleanup(_ id: UUID) {
+        guard let tab = tab(id), tab.worktreeCleanup == nil, let worktree = tab.worktree else { return }
+        let path = Git.originalWorktreePath(worktree)
+        guard gitActivity[id] == nil else {
+            Self.showInfo("Git action still running", "Wait for the current Git action before deleting this worktree.")
+            return
         }
+        var state: WorktreeCleanupState
+        do {
+            state = try Git.prepareWorktreeCleanup(worktree, path: path)
+        } catch {
+            state = WorktreeCleanupState(path: path, worktree: worktree, lastError: error.localizedDescription)
+        }
+        updateTab(id) { $0.worktreeCleanup = state }
+        continueWorktreeCleanup(id)
     }
 
-    private func deleteWorktree(_ worktree: Worktree, path: String) {
-        Task.detached {
-            let result = Git.removeWorktree(worktree, path: path)
-            if !result.ok {
-                await MainActor.run { Self.showError("Couldn't delete the worktree", result.message) }
+    /// Explicit retry only; a persisted checkpoint never starts work at launch.
+    func retryWorktreeCleanup(_ id: UUID) {
+        guard let state = tab(id)?.worktreeCleanup, gitActivity[id] == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = state.stage == .complete ? "Finish removing this workspace entry?" :
+            (state.folderRemoved ? "Retry deleting “\(state.worktree.branch)”?" : "Retry worktree cleanup?")
+        alert.informativeText = state.stage == .complete
+            ? "The original folder and local branch were already removed. This stops the session and removes only its retained workspace entry."
+            : state.folderRemoved
+                ? "The original folder was already removed. Retry stops the session and deletes only the original local branch if its identity is unchanged. A recreated folder or branch is left untouched. There is no filesystem Undo in omux."
+                : state.retryWarning
+        let retry = alert.addButton(withTitle: state.stage == .complete ? "Finish Removing Entry" : "Retry Cleanup")
+        retry.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        continueWorktreeCleanup(id)
+    }
+
+    /// No deletion or ownership adoption: finish only after manual Git cleanup is verified.
+    func verifyManualWorktreeCleanup(_ id: UUID) {
+        guard tab(id)?.worktreeCleanup != nil, gitActivity[id] == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Verify manual worktree cleanup?"
+        alert.informativeText = "This stops the session, then checks the saved repository. Its workspace entry is removed only if the saved folder is absent, its worktree registration is gone, and its exact local branch is absent. This action does not delete files or branches."
+        alert.addButton(withTitle: "Verify Manual Cleanup")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        continueWorktreeCleanup(id, verifyingManual: true)
+    }
+
+    func saveWorktreeCleanupCheckpoint() throws {
+        let workspace = Workspace(groups: groups, selectedTabID: selectedTabID, canvas: canvas)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(workspace)
+        if let current = try? Data(contentsOf: Persistence.workspaceURL), current != data {
+            try current.write(to: Persistence.backupURL, options: .atomic)
+        }
+        // Unlike the routine debounced save, deletion must not proceed after a failed write.
+        try data.write(to: Persistence.workspaceURL, options: .atomic)
+    }
+
+    private func continueWorktreeCleanup(_ id: UUID, verifyingManual: Bool = false) {
+        guard tab(id)?.worktreeCleanup != nil, gitActivity[id] == nil else { return }
+        gitActivity[id] = "Stopping session for cleanup…"
+        Task {
+            defer { gitActivity[id] = nil }
+            do {
+                try saveWorktreeCleanupCheckpoint()
+                try await stopForWorktreeCleanup(id)
+                guard var state = tab(id)?.worktreeCleanup else { return }
+                if verifyingManual {
+                    gitActivity[id] = "Verifying manual cleanup…"
+                    let checkpoint = state
+                    state = await Task.detached { Git.verifyManualWorktreeCleanup(checkpoint) }.value
+                    guard tab(id)?.worktreeCleanup != nil else { return }
+                    updateTab(id) { $0.worktreeCleanup = state }
+                    try saveWorktreeCleanupCheckpoint()
+                    if let error = state.lastError {
+                        Self.showError("Manual cleanup isn't complete", error)
+                        return
+                    }
+                } else if state.stage == .stopping {
+                    guard state.ownership != nil else {
+                        throw WorktreeCleanupState.CleanupError(state.lastError ?? "The original worktree couldn't be verified. Inspect the saved path and branch manually.")
+                    }
+                    state.stage = .worktree
+                    state.lastError = nil
+                    updateTab(id) { $0.worktreeCleanup = state }
+                    try saveWorktreeCleanupCheckpoint()
+                }
+                while state.stage != .complete {
+                    gitActivity[id] = state.folderRemoved ? "Deleting original local branch…" : "Removing original worktree…"
+                    let checkpoint = state
+                    state = await Task.detached { Git.advanceWorktreeCleanup(checkpoint) }.value
+                    guard tab(id)?.worktreeCleanup != nil else { return }
+                    updateTab(id) { $0.worktreeCleanup = state }
+                    try saveWorktreeCleanupCheckpoint()
+                    if let error = state.lastError {
+                        Self.showError(state.folderRemoved ? "Worktree removed; branch retained" : "Worktree cleanup failed", error)
+                        return
+                    }
+                }
+                // Only confirmed folder + branch cleanup removes the retained workspace entry.
+                closeTab(id)
+                try saveWorktreeCleanupCheckpoint()
+            } catch {
+                updateTab(id) { $0.worktreeCleanup?.lastError = error.localizedDescription }
+                // Best effort records the stop/persistence error; no deletion follows this failure.
+                try? saveWorktreeCleanupCheckpoint()
+                Self.showError("Worktree cleanup paused", error.localizedDescription)
             }
         }
     }
 
+    func revealWorktreeCleanup(_ id: UUID) {
+        guard let state = tab(id)?.worktreeCleanup else { return }
+        let path = FileManager.default.fileExists(atPath: state.path) ? state.path : state.worktree.repo
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
     /// Commits, pushes the branch and opens GitHub's pull request page.
     func createPullRequest(_ id: UUID) {
-        guard let tab = tab(id), let worktree = tab.worktree, let path = directory(of: tab),
+        guard let tab = tab(id), tab.worktreeCleanup == nil, gitActivity[id] == nil,
+              let worktree = tab.worktree, let path = directory(of: tab),
               commitIfNeeded(path: path, branch: worktree.branch, suggestion: tab.name) else { return }
         gitActivity[id] = "Pushing \(worktree.branch)…"
         Task.detached {
@@ -138,7 +258,8 @@ extension Store {
 
     /// Merges the session's branch into its base branch in the main checkout.
     func mergeWorktree(_ id: UUID) {
-        guard let tab = tab(id), let worktree = tab.worktree, let path = directory(of: tab),
+        guard let tab = tab(id), tab.worktreeCleanup == nil, gitActivity[id] == nil,
+              let worktree = tab.worktree, let path = directory(of: tab),
               commitIfNeeded(path: path, branch: worktree.branch, suggestion: tab.name) else { return }
         gitActivity[id] = "Merging into \(worktree.base)…"
         Task.detached {

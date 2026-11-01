@@ -79,6 +79,8 @@ struct SessionDetailsSheet: View {
             Text("Session Details").font(.title2).fontWeight(.semibold)
             if let tab = store.tab(tabID) {
                 Text(tab.name).font(.headline)
+                SessionLocationStatus(sessionID: tabID, alwaysShow: true)
+                WorktreeCleanupStatus(sessionID: tabID)
                 let details = store.sessionPersistenceDetails(tabID)
                 VStack(alignment: .leading, spacing: 10) {
                     Label(details.headline, systemImage: "info.circle")

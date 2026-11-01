@@ -137,11 +137,6 @@ enum Git {
         return run(["worktree", "add", "-b", branch, path, base], in: repo)
     }
 
-    static func removeWorktree(_ worktree: Worktree, path: String) -> Result {
-        let removed = run(["worktree", "remove", "--force", path], in: worktree.repo)
-        guard removed.ok else { return removed }
-        return run(["branch", "-D", worktree.branch], in: worktree.repo)
-    }
 
     static func commitAll(in dir: String, message: String) -> Result {
         let added = run(["add", "-A"], in: dir)

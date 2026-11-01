@@ -7,6 +7,10 @@ import AppKit
 enum WorkspaceSmokeChecks {
     static func runIfRequested() {
         let env = ProcessInfo.processInfo.environment
+        if env["OMUX_FOLDER_CLEANUP_SMOKE"] == "1", env["OMUX_WORKSPACE_DIRECTORY"] != nil {
+            Task { await FolderCleanupSmokeChecks.run() }
+            return
+        }
         if env["OMUX_LIFECYCLE_SMOKE"] == "1", env["OMUX_WORKSPACE_DIRECTORY"] != nil {
             Task { await LifecycleSmokeChecks.run() }
             return

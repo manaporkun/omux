@@ -46,6 +46,7 @@ final class Store: ObservableObject {
     @Published var sessionDetailsID: UUID?
     @Published var recoveryRequest: SessionRecoveryRequest?
     @Published var launchRecoveryEntries: [LaunchRecoveryEntry] = []
+    @Published private(set) var sessionLocations: [UUID: SessionLocation] = [:]
     @Published var editingGroupID: UUID?
     @Published var sessionFinderScope: SessionFinderScope?
     @Published var showRecentSessions = false
@@ -75,6 +76,7 @@ final class Store: ObservableObject {
     private var statusVersions: [UUID: Date] = [:]
     private var queryVersions: [UUID: Date] = [:]
     private var hostTimer: Timer?
+    private var refreshingHostedSessions = false
     private var warnedAboutHost = false
     private var terminating = false
     private var codexStarts: [UUID: Task<Void, Never>] = [:]
@@ -82,6 +84,7 @@ final class Store: ObservableObject {
     private var pendingCommands: [UUID: UUID] = [:]
     /// A worktree setup command to run before a new Codex session's TUI starts.
     private var codexSetup: [UUID: String] = [:]
+    private var launchLocationApprovals: [UUID: SessionLocation] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     private init() {
@@ -254,6 +257,92 @@ final class Store: ObservableObject {
         }
         return snapshot[id]?.dead == false ? .running : .ended
     }
+    /// Selecting a replacement folder never rewrites a running shell's actual cwd.
+    func sessionLocation(_ id: UUID, restarting: Bool = false) -> SessionLocation {
+        guard let tab = tab(id), let group = group(containing: id) else {
+            return SessionLocation(configured: nil, actual: nil, live: false)
+        }
+        let live = !restarting && (runtime[id]?.exited == false || sessionHosting[id] == .managed(.running))
+        var actual: String?
+        var processID: pid_t?
+        if live {
+            if isHosted(id), let pane = sessionHost.pane(id), !pane.dead {
+                actual = pane.cwd
+                processID = pane.pid
+            } else if !isHosted(id), let view = terminals[id] {
+                processID = view.process.shellPid
+                actual = SessionLocation.processDirectory(view.process.shellPid)
+            }
+        }
+        return SessionLocation(configured: tab.directory ?? group.directory, actual: actual, live: live, processID: processID)
+    }
+
+    /// Rendering uses cached evidence; execution paths always re-query before submitting work.
+    func displayedSessionLocation(_ id: UUID) -> SessionLocation {
+        if let scope = sessionLocations[id] { return scope }
+        return SessionLocation(configured: tab(id).flatMap { $0.directory ?? group(containing: id)?.directory },
+                               actual: nil, live: false)
+    }
+
+    private func refreshSessionLocation(_ id: UUID, observed: SessionLocation? = nil) {
+        let scope = observed ?? sessionLocation(id)
+        if sessionLocations[id] != scope { sessionLocations[id] = scope }
+        if let actual = scope.actual, scope.live { update(id) { $0.cwd = actual } }
+        if let approval = launchLocationApprovals[id], approval != scope { launchLocationApprovals[id] = nil }
+    }
+
+    private func validateLaunchLocation(_ id: UUID, expected: String) -> Bool {
+        guard let tab = tab(id), tab.worktreeCleanup == nil else { return false }
+        let scope = sessionLocation(id)
+        guard scope.permitsLaunch(expected: expected, reviewed: launchLocationApprovals[id]) else {
+            pendingCommands[id] = nil
+            refreshSessionLocation(id)
+            Notices.shared.post("Session location changed", detail: "No agent command was submitted. Review the actual directory or locate the project folder.", isError: true)
+            return false
+        }
+        return true
+    }
+
+    func locateSessionFolder(_ id: UUID) {
+        guard tab(id)?.worktreeCleanup == nil else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.message = "Choose this session’s folder. A running shell stays in its actual directory until you explicitly restart it."
+        panel.prompt = "Use folder"
+        guard panel.runModal() == .OK, let path = panel.url?.path else { return }
+        chooseSessionFolder(id, path: path)
+    }
+
+    /// Applies a panel choice to this session only, without moving or restarting its live process.
+    func chooseSessionFolder(_ id: UUID, path: String) {
+        guard let tab = tab(id), tab.worktreeCleanup == nil, SessionLocation.isDirectory(path) else { return }
+        updateTab(id) { $0.directory = path }
+        launchLocationApprovals[id] = nil
+        recoveryRequest = nil
+        save()
+        refreshSessionLocation(id)
+        if runtime[id]?.exited != false, sessionHosting[id] != .managed(.running) {
+            terminals.removeValue(forKey: id)?.removeFromSuperview()
+        }
+    }
+
+    func openSessionShellInHome(_ id: UUID) {
+        guard let tab = tab(id), let group = group(containing: id), tab.worktreeCleanup == nil else { return }
+        if runtime[id]?.exited == false || sessionHosting[id] == .managed(.running) {
+            Notices.shared.post("Session is still running", detail: "Its processes were not stopped. Use its terminal, or explicitly end the session before opening a shell in home.", isError: false)
+            return
+        }
+        if case .managed(.unavailable) = sessionHosting[id] { return }
+        launchLocationApprovals[id] = nil
+        terminals.removeValue(forKey: id)?.removeFromSuperview()
+        makeTerminal(tab: tab, group: group, shellDirectory: NSHomeDirectory())
+        refreshSessionLocation(id)
+        focusSession(id)
+    }
+
 
     // MARK: Terminal lifecycle
 
@@ -261,6 +350,7 @@ final class Store: ObservableObject {
     func terminal(for tabID: UUID) -> TermView? {
         if let view = terminals[tabID] { return view }
         guard let loc = location(of: tabID) else { return nil }
+        guard groups[loc.group].tabs[loc.tab].worktreeCleanup == nil else { return nil }
         return makeTerminal(tab: groups[loc.group].tabs[loc.tab], group: groups[loc.group])
     }
 
@@ -272,6 +362,7 @@ final class Store: ObservableObject {
             let id = entry.tab.id
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.terminals[id] == nil, let loc = self.location(of: id) else { return }
+                guard self.groups[loc.group].tabs[loc.tab].worktreeCleanup == nil else { return }
                 _ = self.makeTerminal(tab: self.groups[loc.group].tabs[loc.tab], group: self.groups[loc.group])
             }
             delay += 0.25
@@ -279,7 +370,8 @@ final class Store: ObservableObject {
     }
 
     @discardableResult
-    private func makeTerminal(tab: TabItem, group: TabGroup, command: String? = nil, startProvider: Bool = false) -> TermView {
+    private func makeTerminal(tab: TabItem, group: TabGroup, command: String? = nil, startProvider: Bool = false, shellDirectory: String? = nil) -> TermView {
+        launchLocationApprovals[tab.id] = nil
         let view = TermView(tabID: tab.id)
         terminals[tab.id] = view
         view.onFocusChange = { [weak self, weak view] engaged in
@@ -291,15 +383,21 @@ final class Store: ObservableObject {
             guard let self, let view, self.terminals[tab.id] === view else { return }
             self.handle(event, for: tab.id)
         }
-        launch(view, tab: tab, group: group, command: command, startProvider: startProvider)
+        launch(view, tab: tab, group: group, command: command, startProvider: startProvider, shellDirectory: shellDirectory)
         return view
     }
 
-    private func launch(_ view: TermView, tab: TabItem, group: TabGroup, command: String?, startProvider: Bool) {
+    private func launch(_ view: TermView, tab: TabItem, group: TabGroup, command: String?, startProvider: Bool, shellDirectory: String? = nil) {
+        guard tab.worktreeCleanup == nil else { return }
         let home = NSHomeDirectory()
-        var dir = ((tab.directory ?? group.directory) as NSString?)?.expandingTildeInPath ?? home
-        var isDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) || !isDir.boolValue { dir = home }
+        let pane = sessionHost.pane(tab.id)
+        let scope = SessionLocation(configured: tab.directory ?? group.directory, actual: pane?.cwd,
+                                    live: pane?.dead == false, processID: pane?.pid)
+        sessionLocations[tab.id] = scope
+        // A surviving shell is safe to attach even when its saved project moved.
+        // Creating a replacement is never permitted to silently substitute home.
+        guard let dir = shellDirectory ?? (scope.live ? home : scope.launchDirectory), SessionLocation.isDirectory(dir) else { return }
+        if startProvider, scope.requiresReview || !scope.configuredAvailable { return }
 
         let inherited = ProcessInfo.processInfo.environment
         let shell = inherited["SHELL"] ?? "/bin/zsh"
@@ -365,14 +463,16 @@ final class Store: ObservableObject {
         }
         update(tab.id) {
             $0.provider = provider; $0.agentConnected = false
-            $0.exited = false; $0.cwd = dir; $0.title = ""
+            $0.exited = false; $0.cwd = attachment?.reused == true ? pane?.cwd : dir; $0.title = ""
             $0.statusState = nil; $0.statusKind = nil; $0.statusDetail = nil; $0.statusChildren = []
             $0.interrupted = attachment?.needsResume == true
         }
         if attachment != nil { watchHostedSession(tab.id, view: view) }
         if attachment?.needsResume == true, !startProvider { return }
         if attachment?.reused == true, attachment?.needsResume != true {
-            if provider == .codex { startCodex(view, tab: tab, cwd: dir, reattach: true) }
+            if provider == .codex, let cwd = pane?.cwd {
+                startCodex(view, tab: tab, cwd: cwd, reattach: true)
+            }
             else { refreshBusy(tab.id) }
             return // Never type a second startup command into an existing session.
         }
@@ -393,14 +493,18 @@ final class Store: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak view] in
                 guard let self, let view, self.terminals[tab.id] === view,
                       self.pendingCommands[tab.id] == token else { return }
+                guard self.validateLaunchLocation(tab.id, expected: dir) else { return }
                 self.pendingCommands[tab.id] = nil
                 view.send(txt: command + "\n")
+                self.launchLocationApprovals[tab.id] = nil
             }
         }
     }
 
     private func startCodex(_ view: TermView, tab: TabItem, cwd: String, reattach: Bool = false) {
         guard codexStarts[tab.id] == nil else { return }
+        guard self.tab(tab.id)?.worktreeCleanup == nil else { return }
+        if !reattach, !validateLaunchLocation(tab.id, expected: cwd) { return }
         if reattach && (tab.codexThreadID == nil || sessionHost.pane(tab.id, server: true)?.dead != false) {
             update(tab.id) { $0.busy = false; $0.statusState = .error; $0.statusDetail = "The Codex server stopped. Restart this session to resume its saved conversation." }
             return
@@ -414,12 +518,18 @@ final class Store: ObservableObject {
                 let launch = try await CodexManager.shared.prepare(tabID: tab.id, threadID: tab.codexThreadID, cwd: cwd, name: tab.name)
                 try Task.checkCancellation()
                 guard let self, let view, self.terminals[tab.id] === view else { return }
+                guard self.tab(tab.id)?.worktreeCleanup == nil,
+                      reattach || self.validateLaunchLocation(tab.id, expected: cwd) else {
+                    CodexManager.shared.close(tab.id)
+                    return
+                }
                 self.updateTab(tab.id) { $0.codexThreadID = launch.threadID }
                 self.save()
                 self.update(tab.id) { $0.agentConnected = true; $0.busy = false }
                 if !reattach {
                     let setup = self.codexSetup.removeValue(forKey: tab.id)
                     view.send(txt: (setup.map { Self.afterSetup($0, launch.command) } ?? launch.command) + "\n")
+                    self.launchLocationApprovals[tab.id] = nil
                 }
             } catch {
                 guard !Task.isCancelled, let self, let view, self.terminals[tab.id] === view else { return }
@@ -602,6 +712,13 @@ final class Store: ObservableObject {
 
     func recoveryAction(_ id: UUID) -> SessionRecoveryAction {
         guard let loc = location(of: id) else { return .unavailable("This session has been closed.") }
+        guard groups[loc.group].tabs[loc.tab].worktreeCleanup == nil else {
+            return .unavailable("Worktree cleanup is pending. Retry cleanup or keep this session stopped.")
+        }
+        let scope = displayedSessionLocation(id)
+        if scope.launchDirectory == nil, sessionHosting[id] != .managed(.running) {
+            return .unavailable("Project folder unavailable. Locate a folder or explicitly open a shell in home.")
+        }
         if pendingCommands[id] != nil || codexStarts[id] != nil {
             return .unavailable("This session is starting or connecting. Wait for it to finish; no second launch was submitted.")
         }
@@ -616,6 +733,7 @@ final class Store: ObservableObject {
         let previous = recoveryAction(id)
         refreshClaudeConversation(id)
         refreshBusy(id)
+        refreshSessionLocation(id)
         let action = recoveryAction(id)
         if case .reopenConversation(.claude) = previous, case .startAgent = action {
             Notices.shared.post("Saved conversation is unavailable",
@@ -626,14 +744,26 @@ final class Store: ObservableObject {
         case .unavailable(let reason):
             Notices.shared.post("Session recovery unavailable", detail: reason, isError: false)
         case .runCommand(let command):
+            guard sessionLocation(id).launchDirectory != nil else { return }
             presentRecoveryReview(id, command: command, restarting: false)
         default:
-            performStart(id)
-            launchRecoveryEntries.removeAll { $0.id == id }
+            let scope = sessionLocation(id)
+            if action != .reconnectTerminal, action != .openShell, scope.requiresReview {
+                presentRecoveryReview(id, command: commandRequiringReview(id) ?? tab(id).flatMap { tab in
+                    group(containing: id).flatMap { startupCommand(tab: tab, group: $0) }
+                } ?? "", restarting: false, locationOnly: true)
+            } else {
+                performStart(id)
+                launchRecoveryEntries.removeAll { $0.id == id }
+            }
         }
     }
 
     func requestRestart(_ id: UUID) {
+        guard tab(id)?.worktreeCleanup == nil, sessionLocation(id, restarting: true).launchDirectory != nil else {
+            Notices.shared.post("Project folder unavailable", detail: "Locate a valid folder before restarting. No current process was stopped.", isError: true)
+            return
+        }
         refreshClaudeConversation(id)
         if let command = commandRequiringReview(id) {
             presentRecoveryReview(id, command: command, restarting: true)
@@ -653,31 +783,34 @@ final class Store: ObservableObject {
         return startupCommand(tab: tab, group: group)
     }
 
-    private func recoveryDirectory(_ id: UUID, restarting: Bool) -> String {
-        guard let tab = tab(id) else { return NSHomeDirectory() }
-        let configured = directory(of: tab) ?? NSHomeDirectory()
-        if !restarting, terminals[id] != nil, runtime[id]?.exited == false {
-            return runtime[id]?.cwd ?? configured
-        }
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: configured, isDirectory: &isDirectory) && isDirectory.boolValue
-            ? configured : NSHomeDirectory()
+    private func recoveryDirectory(_ id: UUID, restarting: Bool) -> String? {
+        sessionLocation(id, restarting: restarting).launchDirectory
     }
 
-    private func presentRecoveryReview(_ id: UUID, command: String, restarting: Bool) {
-        guard let tab = tab(id) else { return }
+    private func presentRecoveryReview(_ id: UUID, command: String, restarting: Bool, locationOnly: Bool = false) {
+        guard let tab = tab(id), let directory = recoveryDirectory(id, restarting: restarting) else { return }
         recoveryRequest = SessionRecoveryRequest(tabID: id, name: tab.name,
-                                                directory: recoveryDirectory(id, restarting: restarting),
-                                                command: command, restarting: restarting)
+                                                directory: directory, command: command, restarting: restarting,
+                                                location: sessionLocation(id, restarting: restarting), locationOnly: locationOnly)
     }
 
     func confirmRecovery(_ request: SessionRecoveryRequest) {
         guard recoveryRequest?.id == request.id else { return }
         refreshClaudeConversation(request.tabID)
         refreshBusy(request.tabID)
+        guard tab(request.tabID)?.worktreeCleanup == nil,
+              sessionLocation(request.tabID, restarting: request.restarting) == request.location,
+              request.location.launchDirectory != nil else {
+            recoveryRequest = nil
+            Notices.shared.post("Session location changed", detail: "Nothing was run. Review the current actual directory again.", isError: true)
+            return
+        }
         let command: String?
         if request.restarting {
             command = commandRequiringReview(request.tabID)
+        } else if request.locationOnly, let tab = tab(request.tabID), let group = group(containing: request.tabID),
+                  recoveryAction(request.tabID).isAvailable {
+            command = commandRequiringReview(request.tabID) ?? startupCommand(tab: tab, group: group) ?? ""
         } else if case .runCommand(let current) = recoveryAction(request.tabID) {
             command = current
         } else { command = nil }
@@ -689,8 +822,9 @@ final class Store: ObservableObject {
             return
         }
         recoveryRequest = nil
+        launchLocationApprovals[request.tabID] = request.location
         if request.restarting { performRestart(request.tabID, command: request.command) }
-        else { performStart(request.tabID, reviewedCommand: request.command) }
+        else { performStart(request.tabID, reviewedCommand: request.locationOnly ? nil : request.command, reviewedLocation: request.location) }
         launchRecoveryEntries.removeAll { $0.id == request.tabID }
     }
 
@@ -702,8 +836,8 @@ final class Store: ObservableObject {
     }
 
     /// Starts the selected provider in an idle shell or resumes its exact saved chat.
-    private func performStart(_ id: UUID, reviewedCommand: String? = nil) {
-        guard let loc = location(of: id), pendingCommands[id] == nil else { return }
+    private func performStart(_ id: UUID, reviewedCommand: String? = nil, reviewedLocation: SessionLocation? = nil) {
+        guard let loc = location(of: id), groups[loc.group].tabs[loc.tab].worktreeCleanup == nil, pendingCommands[id] == nil else { return }
         focusSession(id)
         let tab = groups[loc.group].tabs[loc.tab]
         if runtime[id]?.exited == true, let pane = sessionHost.pane(id), !pane.dead {
@@ -713,11 +847,14 @@ final class Store: ObservableObject {
             objectWillChange.send()
             return
         }
+        let scope = sessionLocation(id)
+        guard tab.resolvedProvider(in: groups[loc.group]) == .shell || scope.permitsLaunch(
+            expected: scope.launchDirectory ?? "", reviewed: reviewedLocation ?? launchLocationApprovals[id]) else { return }
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
             if runtime[id]?.provider == .codex, runtime[id]?.statusState == .error,
                !CodexManager.shared.isConnected(id) {
                 if isHosted(id), sessionHost.pane(id, server: true)?.dead == false {
-                    startCodex(view, tab: tab, cwd: runtime[id]?.cwd ?? NSHomeDirectory(), reattach: true)
+                    startCodex(view, tab: tab, cwd: scope.launchDirectory!, reattach: true)
                 } else { performRestart(id, command: reviewedCommand) }
                 return
             }
@@ -735,9 +872,11 @@ final class Store: ObservableObject {
             if let view = terminals[id], !(runtime[id]?.exited ?? true) {
                 // A live Codex TUI is not an idle shell, even when its agent is idle.
                 if provider(of: tab) == .codex {
-                    startCodex(view, tab: tab, cwd: runtime[id]?.cwd ?? directory(of: tab) ?? NSHomeDirectory())
+                    startCodex(view, tab: tab, cwd: scope.launchDirectory!)
                 } else if let command = reviewedCommand ?? startupCommand(tab: tab, group: groups[loc.group]), !command.isEmpty {
+                    guard validateLaunchLocation(id, expected: scope.launchDirectory!) else { return }
                     view.send(txt: command + "\n")
+                    launchLocationApprovals[id] = nil
                 }
             } else {
                 performRestart(id, command: reviewedCommand)
@@ -746,8 +885,10 @@ final class Store: ObservableObject {
         }
         guard let command = reviewedCommand ?? startupCommand(tab: tab, group: groups[loc.group]) else { return }
         if let view = terminals[id], !(runtime[id]?.exited ?? true) {
+            guard validateLaunchLocation(id, expected: scope.launchDirectory!) else { return }
             guard !(runtime[id]?.busy ?? false) else { return }
             view.send(txt: command + "\n")
+            launchLocationApprovals[id] = nil
         } else {
             terminals.removeValue(forKey: id)?.removeFromSuperview()
             makeTerminal(tab: tab, group: groups[loc.group], command: command, startProvider: true)
@@ -1009,6 +1150,8 @@ final class Store: ObservableObject {
     }
 
     func closeTab(_ id: UUID) {
+        if let cleanup = tab(id)?.worktreeCleanup, cleanup.stage != .complete { return }
+        if gitActivity[id] != nil, tab(id)?.worktreeCleanup?.stage != .complete { return }
         closeCodex(id)
         guard let loc = location(of: id) else { return }
         if let view = terminals.removeValue(forKey: id) {
@@ -1017,6 +1160,8 @@ final class Store: ObservableObject {
         }
         runtime[id] = nil
         sessionHosting[id] = nil
+        sessionLocations[id] = nil
+        launchLocationApprovals[id] = nil
         if sessionDetailsID == id { sessionDetailsID = nil }
         Notifier.shared.clear(tabID: id)
         browsers.removeValue(forKey: id)?.close()
@@ -1030,8 +1175,51 @@ final class Store: ObservableObject {
             selectedTabID = siblings.isEmpty ? nil : siblings[min(loc.tab, siblings.count - 1)].id
         }
     }
+    /// Cleanup may delete files only after both protocol detach and process death are verified.
+    func stopForWorktreeCleanup(_ id: UUID) async throws {
+        guard tab(id)?.worktreeCleanup != nil else { throw SessionProcessStop.Failure.processQuery }
+        func roots() -> Set<pid_t> {
+            var roots = Set<pid_t>()
+            if runtime[id]?.exited == false, let pid = terminals[id]?.process.shellPid, pid > 0 { roots.insert(pid) }
+            if let pane = sessionHost.pane(id), !pane.dead, pane.pid > 0 { roots.insert(pane.pid) }
+            if let pane = sessionHost.pane(id, server: true), !pane.dead, pane.pid > 0 { roots.insert(pane.pid) }
+            return roots
+        }
+        var processes = tab(id)?.worktreeCleanup?.processes ?? [:]
+        processes.merge(try SessionProcessStop.capture(roots: roots())) { _, current in current }
+        updateTab(id) { $0.worktreeCleanup?.processes = processes }
+        try saveWorktreeCleanupCheckpoint()
+        pendingCommands[id] = nil
+        codexSetup[id] = nil
+        launchLocationApprovals[id] = nil
+        let starting = codexStarts.removeValue(forKey: id)
+        starting?.cancel()
+        await starting?.value
+        processes.merge(try SessionProcessStop.capture(roots: roots())) { _, current in current }
+        updateTab(id) { $0.worktreeCleanup?.processes = processes }
+        try saveWorktreeCleanupCheckpoint()
+        try await CodexManager.shared.detach(id)
+        CodexManager.shared.close(id)
+        try await CodexManager.shared.waitForShutdown(id)
+        try await SessionProcessStop.stop(processes)
+        // A definitely direct session with no host record does not require tmux to exist.
+        if isHosted(id) || sessionHost.hasRecord(id) || sessionHost.binary != nil {
+            try await sessionHost.resetVerified(id)
+        }
+        sessionWatches.removeValue(forKey: id)?.cancel()
+        statusVersions[id] = nil
+        queryVersions[id] = nil
+        if let view = terminals.removeValue(forKey: id) {
+            view.terminate()
+            view.removeFromSuperview()
+        }
+        if isHosted(id) { setHosting(.managed(.ended), for: id) }
+        update(id) { $0.exited = true; $0.busy = false; $0.agentConnected = false }
+    }
+
 
     private func performRestart(_ id: UUID, command: String? = nil) {
+        guard tab(id)?.worktreeCleanup == nil, sessionLocation(id, restarting: true).launchDirectory != nil else { return }
         closeCodex(id)
         guard let loc = location(of: id) else { return }
         if let view = terminals.removeValue(forKey: id) {
@@ -1092,14 +1280,20 @@ final class Store: ObservableObject {
 
     func deleteGroup(_ id: UUID) {
         guard let gi = groups.firstIndex(where: { $0.id == id }) else { return }
+        guard !groups[gi].tabs.contains(where: { $0.worktreeCleanup != nil || gitActivity[$0.id] != nil }) else {
+            Notices.shared.post("Project still has pending work", detail: "Finish or retry worktree cleanup before removing the project. Its recovery entries were kept.", isError: true)
+            return
+        }
+        let hasWorktrees = groups[gi].tabs.contains { $0.worktree != nil }
         let running = groups[gi].tabs.filter { !(runtime[$0.id]?.exited ?? true) }.count
-        if running > 0 {
+        if running > 0 || hasWorktrees {
             let alert = NSAlert()
-            alert.messageText = "Delete “\(groups[gi].name)”?"
-            alert.informativeText = "\(running) running session\(running == 1 ? "" : "s") will be closed."
-            alert.addButton(withTitle: "Delete")
+            alert.messageText = "Remove “\(groups[gi].name)” from omux?"
+            alert.informativeText = "\(running) running session\(running == 1 ? "" : "s") will be stopped. Existing worktree folders and branches remain on disk. This removes the project’s session entries; it is not worktree deletion and cannot be undone here."
+            alert.addButton(withTitle: "Remove Project")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard !groups[gi].tabs.contains(where: { $0.worktreeCleanup != nil || gitActivity[$0.id] != nil }) else { return }
         }
         for tab in groups[gi].tabs { closeTab(tab.id) }
         groups.remove(at: gi)
@@ -1249,14 +1443,27 @@ final class Store: ObservableObject {
     }
 
     private func refreshHostedSessions() {
-        guard !terminating else { return }
-        guard sessionHosting.contains(where: { $0.value.isManaged }) else { return }
-        let snapshot = sessionHost.paneSnapshot()
+        guard !terminating, !refreshingHostedSessions else { return }
+        refreshingHostedSessions = true
+        defer { refreshingHostedSessions = false }
+        let managed = sessionHosting.contains { $0.value.isManaged }
+        let snapshot = managed ? sessionHost.paneSnapshot() : nil
+        for entry in allTabs {
+            let id = entry.tab.id
+            if sessionHosting[id]?.isManaged == true {
+                let pane = snapshot?[id]
+                refreshSessionLocation(id, observed: SessionLocation(
+                    configured: entry.tab.directory ?? entry.group.directory, actual: pane?.cwd,
+                    live: pane?.dead == false, processID: pane?.pid))
+            } else {
+                refreshSessionLocation(id)
+            }
+        }
+        guard managed else { return }
         let parents = Self.parentProcessIDs()
         for (id, hosting) in sessionHosting where hosting.isManaged {
             setHosting(.managed(hostEvidence(id, snapshot: snapshot)), for: id)
             if let pane = snapshot?[id], !pane.dead {
-                if let cwd = pane.cwd { update(id) { $0.cwd = cwd } }
                 if runtime[id]?.exited == false { refreshBusy(id, panePID: pane.pid, knownBusy: parents.contains(pane.pid)) }
             } else if runtime[id]?.exited == false {
                 update(id) { $0.exited = true; $0.busy = false; $0.agentConnected = false; $0.statusState = nil }

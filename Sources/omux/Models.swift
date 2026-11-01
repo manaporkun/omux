@@ -44,6 +44,8 @@ struct TabItem: Identifiable, Codable, Hashable {
     var codexThreadID: String?
     /// Set when the session runs in its own git worktree; `directory` is the worktree.
     var worktree: Worktree?
+    /// A destructive cleanup keeps this entry, its identity and the remaining stage until success.
+    var worktreeCleanup: WorktreeCleanupState?
     /// The name follows the title Claude Code gives the conversation until the session is renamed.
     var autoName: Bool
 
@@ -68,6 +70,7 @@ struct TabItem: Identifiable, Codable, Hashable {
         claudeSessionID = try c.decodeIfPresent(UUID.self, forKey: .claudeSessionID) ?? UUID()
         codexThreadID = try c.decodeIfPresent(String.self, forKey: .codexThreadID)
         worktree = try c.decodeIfPresent(Worktree.self, forKey: .worktree)
+        worktreeCleanup = try c.decodeIfPresent(WorktreeCleanupState.self, forKey: .worktreeCleanup)
         autoName = try c.decodeIfPresent(Bool.self, forKey: .autoName) ?? Self.isDefaultName(name)
     }
 
@@ -100,6 +103,9 @@ struct Worktree: Codable, Hashable {
     var base: String
     /// The main checkout that owns the worktree.
     var repo: String
+    /// Original cleanup target, independent of a subsequently located session folder.
+    /// Legacy worktrees use Git's deterministic repository/branch location.
+    var path: String?
 }
 
 struct TabGroup: Identifiable, Codable, Hashable {

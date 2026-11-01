@@ -280,6 +280,7 @@ struct TabMenu: View {
     var body: some View {
         Button("Rename") { store.renamingID = tab.id }
         Button("Edit Session…") { store.editingTabID = tab.id }
+            .disabled(tab.worktreeCleanup != nil)
         Button("Session Details…") { store.openSessionDetails(tab.id) }
         Menu("Color") {
             ForEach(TabColor.allCases) { color in
@@ -292,6 +293,7 @@ struct TabMenu: View {
                     Button(group.name) { store.moveTab(tab.id, toGroup: group.id) }
                 }
             }
+            .disabled(tab.worktreeCleanup != nil)
         }
         if let worktree = tab.worktree {
             Divider()
@@ -303,10 +305,13 @@ struct TabMenu: View {
             } else if let pr = pulls.requests[tab.id], pr.state == .merged {
                 Button("Delete Merged Worktree…") { store.cleanUpMergedWorktree(tab.id) }
                     .help("#\(pr.number) was merged")
+                    .disabled(tab.worktreeCleanup != nil)
             } else {
                 Button("Create Pull Request…") { store.createPullRequest(tab.id) }
+                    .disabled(tab.worktreeCleanup != nil)
             }
             Button("Merge into \(worktree.base)") { store.mergeWorktree(tab.id) }
+                .disabled(tab.worktreeCleanup != nil)
             Button("Open Worktree in Finder") {
                 if let dir = store.directory(of: tab) { NSWorkspace.shared.open(URL(fileURLWithPath: dir)) }
             }
@@ -314,8 +319,10 @@ struct TabMenu: View {
         Divider()
         Button("Interrupt") { store.interrupt(tab.id) }
             .help(store.interruptionHelp(tab.id))
+            .disabled(tab.worktreeCleanup != nil)
         Button("Restart Session") { store.requestRestart(tab.id) }
             .help("End the current process and start the session again. Current work is interrupted.")
+            .disabled(tab.worktreeCleanup != nil || !store.displayedSessionLocation(tab.id).configuredAvailable)
         Button("End Session") { store.kill(tab.id) }
             .help("Terminate the agent, shell, and their child processes. Keep this session in the workspace.")
         Button("Close Session", role: .destructive) { store.requestClose(tab.id) }
@@ -333,13 +340,16 @@ struct GroupMenu: View {
         Divider()
         Button("Rename") { store.renamingID = group.id }
         Button("Edit Project…") { store.editingGroupID = group.id }
+            .disabled(group.tabs.contains { $0.worktreeCleanup != nil })
         Divider()
         Button("Move Up") { store.moveGroup(group.id, by: -1) }
             .disabled(store.groups.first?.id == group.id)
         Button("Move Down") { store.moveGroup(group.id, by: 1) }
             .disabled(store.groups.last?.id == group.id)
         Divider()
-        Button("Delete Project", role: .destructive) { store.deleteGroup(group.id) }
+        Button("Remove Project…", role: .destructive) { store.deleteGroup(group.id) }
+            .disabled(group.tabs.contains { $0.worktreeCleanup != nil })
+            .help("Stop its processes and remove the project from omux. Worktree folders and branches remain.")
     }
 }
 

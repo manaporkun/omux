@@ -12,6 +12,9 @@ enum SessionRecoveryAction: Equatable {
     static func resolve(tab: TabItem, group: TabGroup, runtime: TabRuntime,
                         hosting: SessionHosting?, claudeConversationExists: Bool,
                         codexConnected: Bool) -> Self {
+        guard tab.worktreeCleanup == nil else {
+            return .unavailable("Worktree cleanup is pending. Retry cleanup or keep this session stopped.")
+        }
         if case .managed(.unavailable) = hosting {
             return .unavailable("The session host could not be verified. Check Session Details before starting a replacement that might duplicate a surviving process.")
         }
@@ -73,6 +76,8 @@ struct SessionRecoveryRequest: Identifiable {
     let directory: String
     let command: String
     let restarting: Bool
+    let location: SessionLocation
+    let locationOnly: Bool
 }
 
 struct LaunchRecoveryEntry: Identifiable {
@@ -95,12 +100,15 @@ struct SessionRecoveryReview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(request.restarting ? "Restart and run command" : "Run command again").font(.title2)
+            Text(request.locationOnly ? "Review actual session location" : request.restarting ? "Restart and run command" : "Run command again").font(.title2)
             Text(request.name).font(.headline)
-            Text(request.restarting
-                 ? "This ends the session’s current processes, then runs the command below. It does not delete project files or saved conversations."
-                 : "This starts a new invocation, not the old process. Review the complete command before running it.")
-            Text(request.directory).font(.caption).textSelection(.enabled)
+            Text(request.location.requiresReview
+                 ? "The actual running shell is not in the configured project folder. This permission applies only to the exact location shown below; opening a shell in home did not grant it. No conversation identity is changed."
+                 : request.restarting
+                    ? "This ends the session’s current processes, then runs the command below. It does not delete project files or saved conversations."
+                    : "This starts a new invocation, not the old process. Review the complete command before running it.")
+            Text("Configured folder: \(request.location.configured)").font(.caption).textSelection(.enabled)
+            Text("Actual launch directory: \(request.directory)").font(.caption).fontWeight(.semibold).textSelection(.enabled)
             ScrollView {
                 Text(request.command).font(.system(.body, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
@@ -109,7 +117,7 @@ struct SessionRecoveryReview: View {
             HStack {
                 Button("Cancel") { store.recoveryRequest = nil }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(request.restarting ? "Restart and run" : "Run command again") {
+                Button(request.location.requiresReview ? "Run in this actual directory" : request.restarting ? "Restart and run" : "Run command again") {
                     store.confirmRecovery(request)
                 }.keyboardShortcut(.defaultAction)
             }

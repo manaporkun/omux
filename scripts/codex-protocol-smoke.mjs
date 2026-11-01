@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createTCPServer, connect as connectTCP } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -177,6 +177,24 @@ supports_websockets = false
   assert.equal(tuiCode,0,tuiOutput);
   console.log(tuiOutput.trim());
   console.log('PASS: authenticated two-client resume, Allow, Deny, resolved events, interruption, local command, transcript and completion.');
+  // A loaded thread cannot change cwd. Restart must reopen the saved identity on a fresh server.
+  sockets.forEach(ws=>ws.close());
+  const stopped = new Promise(resolve=>child.once('exit',resolve));
+  child.kill();
+  await stopped;
+  errors = '';
+  child = spawn('codex', ['app-server', '--listen', endpoint, '--ws-auth', 'capability-token',
+    '--ws-token-sha256', createHash('sha256').update(token).digest('hex'), '-c', 'analytics.enabled=false'],
+    {env, stdio:['ignore','ignore','pipe']});
+  child.stderr.on('data', bytes => { errors = (errors + bytes).slice(-4000); });
+  await waitFor(() => errors.includes('listening on:'), 'replacement server startup');
+  const recovered = await client(endpoint, token, 'omux_folder_recovery_smoke');
+  const chosen = join(home, 'chosen-project');
+  mkdirSync(chosen);
+  const relocated = await recovered.request('thread/resume', {threadId:id,excludeTurns:true,cwd:chosen});
+  assert.equal(relocated.thread.id, id);
+  assert.equal(realpathSync(relocated.cwd), realpathSync(chosen));
+  console.log('PASS: saved Codex conversation keeps its identity while restarting in the explicitly chosen directory.');
 } catch (error) {
   console.error(String(error));
   console.error('Local model tool names:',toolNames.join(', '));

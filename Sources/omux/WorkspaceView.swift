@@ -243,6 +243,8 @@ struct WorkspaceView: View {
             Divider()
             LaunchRecoverySummary()
             SessionHeader(theme: theme, showFiles: $showFiles)
+            SessionLocationStatus(sessionID: tab.id)
+            WorktreeCleanupStatus(sessionID: tab.id)
             LiveTerminal(tabID: tab.id, theme: theme, isFocused: store.activeTerminalID == tab.id)
                 .id(tab.id)
         }
@@ -292,6 +294,12 @@ private struct LiveTerminal: View {
                 TerminalHost(termView: term, theme: theme, isFocused: isFocused)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+            } else if store.tab(tabID)?.worktreeCleanup != nil {
+                Text("Session stopped for worktree cleanup")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else if store.displayedSessionLocation(tabID).needsRecovery {
+                Text("Choose a folder or explicitly open a shell in home.")
+                    .font(.callout).foregroundStyle(.secondary)
             } else { ProgressView().controlSize(.small) }
         }
         .task { term = store.terminal(for: tabID) }
@@ -366,12 +374,18 @@ private struct TerminalTile: View {
             .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
             Divider()
             SessionCardContextRow(tab: tab, group: group, runtime: runtime, theme: theme)
+            SessionLocationStatus(sessionID: tab.id)
+            WorktreeCleanupStatus(sessionID: tab.id)
             LiveTerminal(tabID: tab.id, theme: theme, isFocused: store.activeTerminalID == tab.id)
             if runtime.interrupted || runtime.exited ||
                 (!runtime.busy && !runtime.agentConnected && store.provider(of: tab) != .shell) {
                 let action = store.recoveryAction(tab.id)
+                let scope = store.displayedSessionLocation(tab.id)
                 HStack {
-                    Text(runtime.interrupted ? "Saved process not restored" : runtime.exited ? "No attached process" : "Ready for explicit launch")
+                    Text(!scope.configuredAvailable ? "Project folder unavailable"
+                         : scope.needsRecovery ? "Review actual session location"
+                         : runtime.interrupted ? "Saved process not restored"
+                         : runtime.exited ? "No attached process" : "Ready for explicit launch")
                         .foregroundStyle(.secondary).lineLimit(1).help(action.explanation)
                     Spacer()
                     Button(action.title) { store.requestRecovery(tab.id) }

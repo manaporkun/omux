@@ -6,7 +6,7 @@ enum Persistence { static let directory = URL(fileURLWithPath: "/private/tmp/omu
 
 @main
 struct HostChecks {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("omux-host-checks-" + UUID().uuidString)
         let other = root.appendingPathComponent("other-workspace")
@@ -83,6 +83,14 @@ struct HostChecks {
         host.destroy(foreignID)
         try demand(try tmux(host, ["display-message", "-p", "-t", foreignTarget + ":0.0", "#{pane_dead}"]) == "1")
         print("PASS unowned dead sessions remain rejected and untouched")
+        try host.setNeedsResume(true, id: foreignID)
+        do {
+            try await host.resetVerified(foreignID)
+            throw NSError(domain: "verified cleanup accepted an unowned session", code: 5)
+        } catch PersistentSessionHost.HostError.ownership { }
+        try demand(host.hasRecord(foreignID))
+        try demand(try tmux(host, ["display-message", "-p", "-t", foreignTarget + ":0.0", "#{pane_dead}"]) == "1")
+        print("PASS verified cleanup rejects foreign ownership and retains recovery records")
         host.destroy(one)
         let interrupted = try host.ensure(one, cwd: root.path, shell: "/bin/zsh", environment: env)
         try demand(interrupted.needsResume && !interrupted.reused)
@@ -98,7 +106,7 @@ struct HostChecks {
         try demand((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
         try host.startServer(one, command: "test \"$OMUX_HOST_TEST\" = \"value with ' quotes\" && exec /bin/sleep 60", environment: env.merging(["OMUX_HOST_TEST":"value with ' quotes"]) { _, new in new })
         try demand(host.pane(one, server: true)?.dead == false)
-        Thread.sleep(forTimeInterval: 0.2)
+        try await Task.sleep(for: .milliseconds(200))
         try demand(host.pane(one, server: true)?.dead == false)
         print("PASS private server environment reaches the service without argv or disk scripts")
         let leaseOwner = PersistentSessionHost(directory: root, relay: relay)
@@ -121,6 +129,15 @@ struct HostChecks {
         host.destroy(two, server: true)
         try demand(try tmux(host, ["display-message", "-p", "-t", serverDecoyTarget + ":0.0", "#{pane_pid}"]) == serverDecoyPID)
         print("PASS dead service recovery and exact service targeting preserve prefix decoys")
+        try await host.resetVerified(one)
+        try demand(host.pane(one) == nil && host.pane(one, server: true) == nil)
+        try demand(!host.hasRecord(one) && host.loadLease(one) == nil)
+        try demand(second.pane(one) != nil)
+        try demand(try tmux(host, ["display-message", "-p", "-t", decoyTarget + ":0.0", "#{pane_pid}"]) == decoyPID)
+        try demand(try tmux(host, ["display-message", "-p", "-t", serverDecoyTarget + ":0.0", "#{pane_pid}"]) == serverDecoyPID)
+        let emptyHost = PersistentSessionHost(directory: root.appendingPathComponent("empty"), relay: relay)
+        try await emptyHost.resetVerified(UUID())
+        print("PASS verified cleanup stops both exact owned sessions without touching prefix decoys or other workspaces")
         print("Host checks passed. Disposable workspace: \(root.path)")
     }
     @MainActor static func tmux(_ host: PersistentSessionHost, _ arguments: [String]) throws -> String {

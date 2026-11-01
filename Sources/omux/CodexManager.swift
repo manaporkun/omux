@@ -143,12 +143,18 @@ final class CodexManager: ObservableObject {
         try Task.checkCancellation()
         let response: [String: Any]
         if let threadID {
-            response = try await connection.request("thread/resume", params: ["threadId": threadID, "excludeTurns": true])
+            response = try await connection.request("thread/resume", params: ["threadId": threadID, "excludeTurns": true, "cwd": cwd])
         } else {
             response = try await connection.request("thread/start", params: ["cwd": cwd])
         }
         guard let thread = response["thread"] as? [String: Any], let id = thread["id"] as? String,
               let endpoint = connection.endpoint else { throw CodexError.server("Codex didn't return a conversation ID") }
+        // thread.cwd is saved creation metadata; the top-level cwd is the effective session scope.
+        guard let actualDirectory = response["cwd"] as? String,
+              URL(fileURLWithPath: actualDirectory).standardizedFileURL.resolvingSymlinksInPath()
+                == URL(fileURLWithPath: cwd).standardizedFileURL.resolvingSymlinksInPath() else {
+            throw CodexError.server("Codex did not confirm the reviewed working directory. No terminal command was submitted.")
+        }
         // Naming materializes a new conversation before a second client (the TUI)
         // resumes it, including conversations with no user turn yet.
         if threadID == nil {
@@ -246,6 +252,12 @@ final class CodexManager: ObservableObject {
         }
         clearActivity(tabID)
         threads[tabID] = nil
+    }
+
+    /// A cancelled prepare may close its connection before a thread was registered.
+    /// Cleanup must await that teardown even when detach has no thread to inspect.
+    func waitForShutdown(_ tabID: UUID) async throws {
+        if let task = retiring[tabID] { try await task.value }
     }
 
     private func clearActivity(_ tabID: UUID) {

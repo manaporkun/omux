@@ -83,6 +83,54 @@ replaced through recovery. The launch summary links saved sessions whose running
 missing or unverified; it does not infer that they were mid-task. Opening a review link only reveals
 the session. Dismissing the summary does not resolve blocked/error/interrupted state.
 
+## Unavailable project folders
+
+A moved, deleted, inaccessible, or non-directory configured path keeps **Project folder unavailable**
+visible on the affected session. Replacement shells and managed agents do not silently fall back to
+home. A surviving process is retained, and its actual directory is shown separately from its
+configured location.
+
+- **Locate folder…** chooses a valid directory for this session only. It preserves session and
+  conversation IDs, leaves sibling sessions unchanged, and does not move or restart a live shell.
+- **Open shell in home** explicitly opens a plain shell when no live process exists. It does not
+  launch the configured agent/command, repair the missing project, or authorize a later agent launch.
+- If the running shell differs from the configured folder, starting an agent requires review of the
+  exact actual directory. That permission is bound to the location and process evidence and is
+  rechecked before submission. Restart requires a valid configured folder before stopping anything.
+- Codex must confirm the reviewed directory in its protocol response. An already-loaded Codex
+  conversation cannot be relocated in place; explicit Restart reopens the same saved identity
+  on a fresh server in the chosen directory.
+- Locating a folder does not recreate a worktree or change the original cleanup target. If the
+  original worktree cannot be verified, cleanup remains paused rather than deleting a newly chosen
+  folder under the old worktree identity.
+
+Presentation uses cached location evidence refreshed alongside the existing batched host snapshot;
+rendering does not spawn per-card tmux queries. Explicit launch/review actions revalidate fresh
+location evidence, including after a folder disappears during confirmation.
+
+## Worktree cleanup failures
+
+**Delete Worktree and Branch** warns that uncommitted and ignored files are permanently deleted;
+there is no filesystem Undo. Cleanup stops the session and verifies process death before Git removes
+the original worktree. The workspace entry, conversation identity, original path, and branch remain
+until cleanup finishes. Durable checkpoints distinguish failure to remove the folder from a removed
+folder whose local branch could not be deleted.
+
+**Retry Cleanup** requires another explicit confirmation and resumes only verified original stages.
+Folder/registration identities and the branch commit/reflog protect against adopting replacements.
+Changed or unverifiable ownership pauses cleanup. Repositories without a readable original branch
+reflog require manual Git inspection/cleanup instead of an unsafe automatic deletion.
+
+The retained card and Session Details provide the error, saved folder/branch/repository, retry, and
+reveal actions. **Verify Manual Cleanup…** stops the session and checks Git without deleting anything;
+it removes the entry only after the saved folder, its worktree registration, and exact local branch
+are verified absent. Query failure is not proof of absence. Relaunch never resumes deletion or
+materializes a new terminal for a retained cleanup entry.
+
+**Remove Project…** stops its sessions and removes the project from omux, but leaves worktree folders
+and branches on disk. Projects with unfinished cleanup cannot be removed until that state is resolved.
+
+
 
 ## Development preview
 
@@ -219,6 +267,18 @@ and test command-review Cancel, confirmation, and stale-review rejection. Result
 are written beside `lifecycle-checks.json`. The provider protocol smoke
 `node scripts/codex-protocol-smoke.mjs` uses an isolated real Codex server/TUI and a local test endpoint;
 it does not call OpenAI or use account credentials.
+
+`OMUX_FOLDER_CLEANUP_SMOKE=1` runs the focused two-launch folder/cleanup scenario. Use only its
+disposable fixture: a project named `Folder cleanup checks` with a missing configured folder, a
+harmless `pwd > <workspace>/folder-command-cwd.txt` command, an existing hosted home shell from a
+previous build, a second missing-folder session, and two real shell worktrees. The first worktree's
+branch must also be checked out in a sibling `partial-duplicate` worktree; the second must be locked.
+Persist each original custom worktree path in its worktree metadata. The first launch exercises the
+native folder picker/deletion dialogs, chosen-versus-actual scope, stale confirmation, and both
+cleanup failures, then quits. Reopen the same fixture with the flag to verify retained checkpoints
+and explicit retries. It writes `folder-cleanup-checks.json` and native view snapshots. Never use
+real project folders or account-backed agent commands for this destructive fixture.
+
 
 
 ## Current boundaries

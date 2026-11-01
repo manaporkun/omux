@@ -226,6 +226,50 @@ final class PersistentSessionHost {
         }
     }
 
+    /// Destructive worktree cleanup must not mistake a failed host query for a stopped session.
+    /// Check both owned terminal and Codex server sessions, independent of the current preference.
+    func resetVerified(_ id: UUID) async throws {
+        let targets = try cleanupTargets(id)
+        for target in targets {
+            let result = run(["kill-session", "-t", target])
+            if !result.ok, try cleanupTargets(id).contains(target) {
+                throw HostError.command("The session could not be stopped: \(result.out)")
+            }
+        }
+        guard try cleanupTargets(id).isEmpty else {
+            throw HostError.command("The session is still present. Its worktree was left untouched.")
+        }
+        for file in [recordFile(id), statusFile(id), folder(id).appendingPathComponent("query.osc"),
+                     leaseFile(id), tokenFile(id)] where FileManager.default.fileExists(atPath: file.path) {
+            try FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private func cleanupTargets(_ id: UUID) throws -> [String] {
+        guard binary != nil else { throw HostError.unavailable }
+        let result = run(["list-sessions", "-F", "#{session_name}\t#{session_id}\t#{@omux-id}"])
+        guard result.ok else {
+            // tmux distinguishes an absent server from a failed query against a running one.
+            if result.out.hasPrefix("no server running on ")
+                || (result.out.hasPrefix("error connecting to ")
+                    && (result.out.hasSuffix("(No such file or directory)") || result.out.hasSuffix("(Connection refused)"))) {
+                return []
+            }
+            throw HostError.command("Could not verify that the session stopped: \(result.out)")
+        }
+        let names = [name(id), name(id, server: true)]
+        var targets: [String] = []
+        for row in result.out.split(separator: "\n") {
+            let fields = row.split(separator: "\t", omittingEmptySubsequences: false)
+            guard let sessionName = fields.first, names.contains(String(sessionName)) else { continue }
+            guard fields.count == 3, fields[2] == id.uuidString.lowercased(),
+                  fields[1].hasPrefix("$"), !fields[1].dropFirst().isEmpty,
+                  fields[1].dropFirst().allSatisfy(\.isNumber) else { throw HostError.ownership }
+            targets.append(String(fields[1]))
+        }
+        return targets
+    }
+
     func hasRecord(_ id: UUID) -> Bool { FileManager.default.fileExists(atPath: recordFile(id).path) }
 
     func needsResume(_ id: UUID) -> Bool {

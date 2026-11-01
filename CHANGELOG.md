@@ -44,6 +44,16 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 - Recovery distinguishes surviving-process reconnection, saved-conversation reopening, and reviewed
   command replay. Launch summaries link affected sessions without inferring mid-task work. Custom
   replay/Restart previews the exact command/directory and rejects stale confirmation.
+- Missing project/worktree folders stay visibly unavailable instead of silently launching replacement
+  terminals in home. Locate folder preserves session/conversation identity and live cwd; opening a
+  home shell is separate from authorizing an agent. Scope review and Restart revalidate actual locations.
+- Worktree cleanup retains stopped, durable recovery entries after folder/branch failures, with
+  explicit retry, reveal, and manual-cleanup verification. Original folder/registration/branch ownership
+  is checked before deletion; retargeting a session never retargets cleanup to an unrelated folder.
+  Permanent uncommitted/ignored-file loss is warned; project removal retains worktree files/branches.
+- Cleanup verifies owned host shutdown and process birth identities, including exited unreaped
+  children, before removing files. Location presentation reuses cached/batched host evidence rather
+  than spawning per-card tmux commands during rendering.
 
 ### Fixed
 
