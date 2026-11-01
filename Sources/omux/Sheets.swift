@@ -4,7 +4,7 @@ import SwiftUI
 struct QuickSwitcher: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
+    @ViewState private var query = ""
     @FocusState private var focused: Bool
 
     private struct Match: Identifiable {
@@ -57,7 +57,7 @@ struct QuickSwitcher: View {
     }
 
     private func pick(_ id: UUID) {
-        store.selectedTabID = id
+        store.focusSession(id)
         dismiss()
     }
 }
@@ -83,14 +83,14 @@ struct TabEditSheet: View {
         var id: String { rawValue }
     }
 
-    @State private var name = ""
-    @State private var directory = ""
-    @State private var mode: CommandMode = .inherit
-    @State private var customCommand = ""
-    @State private var sessionID = UUID()
-    @State private var codexThreadID: String?
+    @ViewState private var name = ""
+    @ViewState private var directory = ""
+    @ViewState private var mode: CommandMode = .inherit
+    @ViewState private var customCommand = ""
+    @ViewState private var sessionID = UUID()
+    @ViewState private var codexThreadID: String?
     /// Only a fresh start is saved: Codex can assign or replace the thread while the sheet is open.
-    @State private var freshConversation = false
+    @ViewState private var freshConversation = false
 
     private var provider: SessionProvider {
         switch mode {
@@ -196,12 +196,12 @@ struct GroupEditSheet: View {
     @Environment(\.dismiss) private var dismiss
     let groupID: UUID
 
-    @State private var name = ""
-    @State private var directory = ""
-    @State private var command = ""
-    @State private var provider = SessionProvider.claude
-    @State private var useWorktrees = false
-    @State private var worktreeSetup = ""
+    @ViewState private var name = ""
+    @ViewState private var directory = ""
+    @ViewState private var command = ""
+    @ViewState private var provider = SessionProvider.claude
+    @ViewState private var useWorktrees = false
+    @ViewState private var worktreeSetup = ""
 
     var body: some View {
         Form {
@@ -262,12 +262,12 @@ struct GroupEditSheet: View {
 struct RecentSessionsSheet: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
-    @State private var sessions: [RecentConversation] = []
-    @State private var loaded = false
-    @State private var query = ""
-    @State private var byFolder = false
-    @State private var provider = SessionProvider.claude
-    @State private var error: String?
+    @ViewState private var sessions: [RecentConversation] = []
+    @ViewState private var loaded = false
+    @ViewState private var query = ""
+    @ViewState private var byFolder = false
+    @ViewState private var provider = SessionProvider.claude
+    @ViewState private var error: String?
     @FocusState private var focused: Bool
 
     private var matches: [RecentConversation] {

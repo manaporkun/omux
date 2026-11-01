@@ -19,10 +19,10 @@ struct WelcomeSheet: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var usage = UsageMonitor()
     @ObservedObject private var codex = CodexManager.shared
-    @State private var claudePath: String??
-    @State private var codexPath: String??
-    @State private var notifications: UNAuthorizationStatus?
-    @State private var checkedUsage = false
+    @ViewState private var claudePath: String??
+    @ViewState private var codexPath: String??
+    @ViewState private var notifications: UNAuthorizationStatus?
+    @ViewState private var checkedUsage = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

@@ -423,7 +423,7 @@ struct AgentRows: View {
     @ObservedObject private var monitor = AgentMonitor.shared
     let tabID: UUID
     let selected: Bool
-    @State private var showAll = false
+    @ViewState private var showAll = false
 
     var body: some View {
         let all = monitor.agents[tabID] ?? []
@@ -469,7 +469,7 @@ struct AgentRows: View {
 struct AgentPill: View {
     @ObservedObject private var monitor = AgentMonitor.shared
     let tabID: UUID
-    @State private var open = false
+    @ViewState private var open = false
 
     var body: some View {
         let agents = monitor.agents[tabID] ?? []

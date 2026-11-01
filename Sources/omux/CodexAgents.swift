@@ -5,7 +5,7 @@ struct CodexAgents: View {
     @ObservedObject private var manager = CodexManager.shared
     let tabID: UUID
     var compact = false
-    @State private var open = false
+    @ViewState private var open = false
 
     private var agents: [CodexAgent] { manager.agents[tabID] ?? [] }
 
@@ -47,8 +47,8 @@ struct CodexAgents: View {
 struct CodexAgentTranscriptView: View {
     @EnvironmentObject var store: Store
     let ref: CodexAgentRef
-    @State private var text = ""
-    @State private var error: String?
+    @ViewState private var text = ""
+    @ViewState private var error: String?
 
     var body: some View {
         VStack(spacing: 0) {

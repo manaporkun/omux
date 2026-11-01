@@ -57,6 +57,7 @@ private final class ProcessEvents: LocalProcessTerminalViewDelegate {
 final class TermView: LocalProcessTerminalView {
     let tabID: UUID
     var onEvent: ((TermEvent) -> Void)?
+    var onFocus: (() -> Void)?
     private let events = ProcessEvents()
     private var oscObservation: TerminalOscObservation?
 
@@ -81,6 +82,11 @@ final class TermView: LocalProcessTerminalView {
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocus?()
+        super.mouseDown(with: event)
+    }
 
     func apply(_ theme: Theme) {
         font = Fonts.terminal()
@@ -307,8 +313,9 @@ final class TermView: LocalProcessTerminalView {
 struct TerminalHost: NSViewRepresentable {
     let termView: TermView
     let theme: Theme
+    var isFocused = true
 
-    final class Coordinator { var currentID: UUID? }
+    final class Coordinator { var currentID: UUID?; var wasFocused = false }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -320,14 +327,20 @@ struct TerminalHost: NSViewRepresentable {
 
     func updateNSView(_ container: NSView, context: Context) {
         container.layer?.backgroundColor = theme.background.cgColor
-        guard context.coordinator.currentID != termView.tabID || termView.superview !== container else { return }
-        context.coordinator.currentID = termView.tabID
-        container.subviews.forEach { $0.removeFromSuperview() }
-        termView.frame = container.bounds
-        termView.autoresizingMask = [.width, .height]
-        container.addSubview(termView)
-        DispatchQueue.main.async {
-            termView.window?.makeFirstResponder(termView)
+        let changed = context.coordinator.currentID != termView.tabID || termView.superview !== container
+        if changed {
+            context.coordinator.currentID = termView.tabID
+            container.subviews.forEach { $0.removeFromSuperview() }
+            termView.frame = container.bounds
+            termView.autoresizingMask = [.width, .height]
+            container.addSubview(termView)
         }
+        if isFocused && (changed || !context.coordinator.wasFocused) {
+            DispatchQueue.main.async {
+                guard termView.superview === container else { return }
+                termView.window?.makeFirstResponder(termView)
+            }
+        }
+        context.coordinator.wasFocused = isFocused
     }
 }

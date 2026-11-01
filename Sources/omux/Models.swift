@@ -139,6 +139,18 @@ struct TabGroup: Identifiable, Codable, Hashable {
 struct Workspace: Codable {
     var groups: [TabGroup] = []
     var selectedTabID: UUID?
+    var canvas = CanvasWorkspace()
+
+    init(groups: [TabGroup] = [], selectedTabID: UUID? = nil, canvas: CanvasWorkspace = CanvasWorkspace()) {
+        self.groups = groups; self.selectedTabID = selectedTabID; self.canvas = canvas
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        groups = try c.decodeIfPresent([TabGroup].self, forKey: .groups) ?? []
+        selectedTabID = try c.decodeIfPresent(UUID.self, forKey: .selectedTabID)
+        canvas = try c.decodeIfPresent(CanvasWorkspace.self, forKey: .canvas) ?? CanvasWorkspace()
+    }
 }
 
 /// Live, non-persisted state of one terminal tab.
@@ -216,7 +228,8 @@ enum Persistence {
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         // A beta build (./build.sh --beta) keeps its own workspace next to the release one.
-        let dir = base.appendingPathComponent(Persistence.isBeta ? "omux-beta" : "omux", isDirectory: true)
+        let name = Persistence.isWorkspacePreview ? "omux-workspace-preview" : Persistence.isBeta ? "omux-beta" : "omux"
+        let dir = base.appendingPathComponent(name, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
@@ -225,6 +238,7 @@ enum Persistence {
 
     /// Built with `./build.sh --beta`: a separate app, preferences and workspace.
     static let isBeta = Bundle.main.bundleIdentifier?.hasSuffix(".beta") == true
+    static let isWorkspacePreview = Bundle.main.bundleIdentifier?.hasSuffix(".workspace-preview") == true
 
     static var backupURL: URL { directory.appendingPathComponent("workspace.json.bak") }
 

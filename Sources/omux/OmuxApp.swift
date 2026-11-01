@@ -9,7 +9,7 @@ struct OmuxApp: App {
     init() { Prefs.importReleaseSettingsIfBeta() }
 
     var body: some Scene {
-        Window(Persistence.isBeta ? "omux Beta" : "omux", id: "main") {
+        Window(Persistence.isWorkspacePreview ? "omux Workspace" : Persistence.isBeta ? "omux Beta" : "omux", id: "main") {
             ContentView()
                 .environmentObject(store)
                 .frame(minWidth: 720, minHeight: 420)
@@ -224,27 +224,15 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            Sidebar(theme: theme)
-                .toolbar(removing: .sidebarToggle)
-        } detail: {
+        HStack(spacing: 0) {
+            ProjectSidebar(theme: theme)
+                .frame(width: 224)
+            Divider()
             HSplitView {
-                VStack(spacing: 0) {
-                    SessionHeader(theme: theme, showFiles: $showFiles)
-                    // Over the terminal, so a notice doesn't resize the session.
-                    ZStack(alignment: .top) {
-                        if let id = store.selectedTabID, let term = store.terminal(for: id) {
-                            TerminalHost(termView: term, theme: theme)
-                        } else {
-                            ContentUnavailableView("No session", systemImage: "terminal", description: Text("Press ⌘T to start one."))
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .background(Color(nsColor: theme.background))
-                        }
-                        NoticeStack(theme: theme)
-                    }
-                }
-                .frame(minWidth: 360)
-                .ignoresSafeArea(.container, edges: .top)
+                WorkspaceView(theme: theme, showFiles: $showFiles)
+                    .overlay(alignment: .top) { NoticeStack(theme: theme) }
+                    .frame(minWidth: 360)
+                    .ignoresSafeArea(.container, edges: .top)
                 if showFiles {
                     RightPanel(root: projectRoot, theme: theme)
                         .frame(minWidth: 260, idealWidth: 380, maxWidth: 900)
@@ -289,9 +277,14 @@ struct SessionHeader: View {
                 Circle()
                     .fill(rt.statusColor ?? tab.color.color ?? Color.secondary.opacity(0.4))
                     .frame(width: 8, height: 8)
-                Text(tab.name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(1)
+                if store.renamingID == tab.id {
+                    RenameField(initial: tab.name) { store.rename(tab.id, to: $0) }
+                        .frame(minWidth: 80, maxWidth: 240)
+                } else {
+                    Text(tab.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                }
                 if [.claude, .codex].contains(store.provider(of: tab)) {
                     Text(store.provider(of: tab).label).font(.caption2).foregroundStyle(.tertiary)
                 }
@@ -369,6 +362,13 @@ struct AppCommands: Commands {
                 .keyboardShortcut("w", modifiers: [.command, .shift])
         }
         CommandGroup(after: .sidebar) {
+            Button("All Windows") { store.showAllWindows() }
+                .keyboardShortcut(.escape, modifiers: [])
+            Button("Find Project…") { NotificationCenter.default.post(name: .findWorkspaceProject, object: nil) }
+                .keyboardShortcut("p")
+            Button("Next Needing You") { store.nextAttentionSession() }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            Divider()
             Button("Files Panel") {
                 UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: Prefs.showFiles), forKey: Prefs.showFiles)
             }
@@ -429,7 +429,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSUpdateDynamicServices()
         Notifier.shared.activate()
         _ = Updater.shared
+        #if DEBUG
+        WorkspaceSmokeChecks.runIfRequested()
+        #endif
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53,
+               event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+               event.window?.attachedSheet == nil,
+               let terminal = event.window?.firstResponder as? TermView,
+               Store.shared.canvas.maximizedID == terminal.tabID {
+                Store.shared.showAllWindows()
+                return nil
+            }
             guard Fonts.isBiggerKey(event.charactersIgnoringModifiers, event.modifierFlags) else { return event }
             Fonts.adjustSize(by: 1)
             return nil

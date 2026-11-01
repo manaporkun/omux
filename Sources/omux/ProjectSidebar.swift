@@ -1,0 +1,145 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct ProjectSidebar: View {
+    @EnvironmentObject var store: Store
+    let theme: Theme
+    @ViewState private var query = ""
+    @FocusState private var searching: Bool
+
+    private var projects: [TabGroup] {
+        store.groups.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+            .sorted {
+                let a = store.canvas.pinnedProjects.contains($0.id), b = store.canvas.pinnedProjects.contains($1.id)
+                if a != b { return a }
+                let comparison = $0.name.localizedStandardCompare($1.name)
+                return comparison == .orderedSame ? $0.id.uuidString < $1.id.uuidString : comparison == .orderedAscending
+            }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            sidebar.frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+        .foregroundStyle(Color(nsColor: theme.foreground))
+        .background(Color(nsColor: theme.chrome))
+        .ignoresSafeArea(.container, edges: .top)
+        .onReceive(NotificationCenter.default.publisher(for: .findWorkspaceProject)) { _ in searching = true }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            for provider in providers {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                    guard let data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                    DispatchQueue.main.async { store.openFolder(url.path) }
+                }
+            }
+            return true
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 13) {
+                Spacer()
+                Button { store.openFolderPanel() } label: { Image(systemName: "folder.badge.plus") }
+                    .help("Open folder as project (⌘O)")
+                Button { store.showRecentSessions = true } label: { Image(systemName: "clock.arrow.circlepath") }
+                    .help("Recent conversations (⇧⌘O)")
+                SettingsLink { Image(systemName: "gearshape") }
+            }
+            .buttonStyle(.plain).foregroundStyle(.secondary).padding(.trailing, 14).frame(height: 28)
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.tertiary)
+                TextField("Find a project", text: $query).textFieldStyle(.plain).focused($searching)
+                if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
+            }
+            .font(.system(size: 11)).padding(7)
+            .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+            .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 6)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    if !store.attentionSessions.isEmpty {
+                        sectionLabel("Needs you", color: .orange)
+                        ForEach(store.attentionSessions, id: \.tab.id) { entry in
+                            Button { store.focusSession(entry.tab.id) } label: {
+                                HStack(spacing: 7) {
+                                    SessionStateDot(state: CanvasSessionState(store.runtime[entry.tab.id] ?? TabRuntime()))
+                                    Text(entry.tab.name).lineLimit(1)
+                                    Spacer(minLength: 2)
+                                    Text(entry.group.name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                .font(.system(size: 11)).padding(.horizontal, 9).padding(.vertical, 7)
+                                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                            }.buttonStyle(.plain)
+                        }
+                        Divider().padding(.vertical, 9)
+                    }
+                    sectionLabel(query.isEmpty ? "Projects" : "Results")
+                    if projects.isEmpty {
+                        Text("No matching projects").font(.caption).foregroundStyle(.secondary).padding(10)
+                    }
+                    ForEach(projects) { group in projectRow(group) }
+                    Button { store.openFolderPanel() } label: { Label("Open a project…", systemImage: "plus") }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 9).padding(.top, 14)
+                }.padding(.horizontal, 8).padding(.bottom, 16)
+            }
+            Divider()
+            HStack(spacing: 7) {
+                Circle().fill(.green).frame(width: 5, height: 5)
+                Text("\(store.runningSessionCount) live sessions").monospacedDigit()
+                Spacer()
+                Text("Local").foregroundStyle(.tertiary)
+            }
+            .font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 15).padding(.vertical, 12)
+        }
+    }
+
+    private func sectionLabel(_ text: String, color: Color = .secondary) -> some View {
+        Text(text.uppercased()).font(.system(size: 9, weight: .semibold)).tracking(0.8)
+            .foregroundStyle(color).padding(.horizontal, 9).padding(.top, 12).padding(.bottom, 6)
+    }
+
+    private func projectRow(_ group: TabGroup) -> some View {
+        let selected = store.selectedGroup?.id == group.id
+        let states = group.tabs.map { CanvasSessionState(store.runtime[$0.id] ?? TabRuntime(exited: true)) }
+        let attention = states.filter(\.needsAttention).count
+        let running = states.filter { $0 == .working || $0 == .running }.count
+        return Button { store.selectProject(group.id) } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Image(systemName: store.canvas.pinnedProjects.contains(group.id) ? "pin.fill" : "folder")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    if store.renamingID == group.id {
+                        RenameField(initial: group.name) { store.rename(group.id, to: $0) }
+                    } else { Text(group.name).fontWeight(selected ? .semibold : .regular).lineLimit(1) }
+                    Spacer(minLength: 2)
+                    if attention > 0 {
+                        Text("\(attention)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.9), in: Capsule()).foregroundStyle(.black)
+                    } else if running > 0 {
+                        Text("\(running) running").font(.system(size: 10)).foregroundStyle(.blue).monospacedDigit()
+                    }
+                }
+                if selected && !states.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(states.enumerated()), id: \.offset) { _, state in SessionStateDot(state: state) }
+                    }.padding(.leading, 20)
+                }
+            }
+            .font(.system(size: 12)).padding(.horizontal, 9).padding(.vertical, 9)
+            .background(selected ? Color.accentColor.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .opacity(selected || attention > 0 || running > 0 ? 1 : 0.65)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(store.canvas.pinnedProjects.contains(group.id) ? "Unpin Project" : "Pin Project") { store.togglePinned(group.id) }
+            GroupMenu(group: group)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let findWorkspaceProject = Notification.Name("omux.findWorkspaceProject")
+}

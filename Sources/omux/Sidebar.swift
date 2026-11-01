@@ -101,7 +101,7 @@ struct TabRow: View {
     @ObservedObject private var pulls = PullRequestMonitor.shared
     @ObservedObject private var diffStats = DiffStatMonitor.shared
     let tab: TabItem
-    @State private var hovering = false
+    @ViewState private var hovering = false
     @AppStorage(Prefs.showFolderPath) private var showFolderPath = true
 
     /// "2 agents" while subagents run; the selected session lists them instead.
@@ -205,7 +205,7 @@ struct TabRow: View {
 struct GroupHeader: View {
     @EnvironmentObject var store: Store
     let group: TabGroup
-    @State private var hovering = false
+    @ViewState private var hovering = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -247,7 +247,7 @@ struct RenameField: View {
     @EnvironmentObject var store: Store
     let initial: String
     let commit: (String) -> Void
-    @State private var draft = ""
+    @ViewState private var draft = ""
     @FocusState private var focused: Bool
 
     var body: some View {

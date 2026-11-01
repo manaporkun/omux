@@ -182,10 +182,10 @@ struct ChangesPanel: View {
     @ObservedObject private var changes = Changes.shared
     let theme: Theme
     @AppStorage(Prefs.previewWrapLines) private var wrapLines = true
-    @State private var selected: String?
-    @State private var lines: [DiffLine] = []
-    @State private var editing: Int?
-    @State private var draft = ""
+    @ViewState private var selected: String?
+    @ViewState private var lines: [DiffLine] = []
+    @ViewState private var editing: Int?
+    @ViewState private var draft = ""
 
     private var file: ChangedFile? { changes.files.first { $0.path == selected } }
     private var notes: [DiffNote] { store.selectedTabID.flatMap { changes.notes[$0] } ?? [] }

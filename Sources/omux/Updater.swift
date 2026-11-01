@@ -12,7 +12,7 @@ final class Updater: ObservableObject {
     private var observation: NSKeyValueObservation?
 
     private init() {
-        let inBundle = Bundle.main.bundleURL.pathExtension == "app"
+        let inBundle = Bundle.main.bundleURL.pathExtension == "app" && !Persistence.isWorkspacePreview
         controller = SPUStandardUpdaterController(startingUpdater: inBundle, updaterDelegate: nil, userDriverDelegate: nil)
         observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             let value = updater.canCheckForUpdates

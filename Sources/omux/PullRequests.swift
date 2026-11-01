@@ -317,7 +317,7 @@ struct PullRequestBadge: View {
 struct PullRequestChip: View {
     @ObservedObject private var monitor = PullRequestMonitor.shared
     let tabID: UUID
-    @State private var open = false
+    @ViewState private var open = false
 
     var body: some View {
         if let pr = monitor.requests[tabID] {

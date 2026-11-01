@@ -1,5 +1,8 @@
 # omux
 
+This fork adds a native project workspace: live terminal grid, maximize/back, a session shelf,
+and cross-project attention navigation. See [workspace development and current scope](docs/workspace.md).
+
 **A 5 MB native Mac terminal for running fleets of coding agents.**
 
 Written in Swift on SwiftTerm, no Electron, no web view, launches instantly. omux keeps many [Claude Code](https://claude.com/claude-code) and [Codex](https://developers.openai.com/codex/cli) sessions in one window, shows you which one needs you, lets you answer from the sidebar, and gives each session its own branch.

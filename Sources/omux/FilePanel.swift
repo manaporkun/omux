@@ -86,11 +86,11 @@ struct FilePanel: View {
     let theme: Theme
     @AppStorage(Prefs.filesByDate) private var byDate = false
     @AppStorage(Prefs.filesBrowserCollapsed) private var browserCollapsed = false
-    @State private var rootNode: FileNode?
-    @State private var watcher: FolderWatcher?
-    @State private var version = 0
-    @State private var selected: String?
-    @State private var previewURL: URL?
+    @ViewState private var rootNode: FileNode?
+    @ViewState private var watcher: FolderWatcher?
+    @ViewState private var version = 0
+    @ViewState private var selected: String?
+    @ViewState private var previewURL: URL?
 
     var body: some View {
         VSplitView {

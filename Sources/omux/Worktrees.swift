@@ -192,16 +192,16 @@ struct WorktreeSheet: View {
     @Environment(\.dismiss) private var dismiss
     let groupID: UUID
 
-    @State private var name = ""
-    @State private var branch = ""
-    @State private var branchEdited = false
-    @State private var base = ""
-    @State private var branches: [String] = []
-    @State private var repo: String?
-    @State private var loaded = false
-    @State private var error: String?
-    @State private var working = false
-    @State private var provider: SessionProvider?
+    @ViewState private var name = ""
+    @ViewState private var branch = ""
+    @ViewState private var branchEdited = false
+    @ViewState private var base = ""
+    @ViewState private var branches: [String] = []
+    @ViewState private var repo: String?
+    @ViewState private var loaded = false
+    @ViewState private var error: String?
+    @ViewState private var working = false
+    @ViewState private var provider: SessionProvider?
 
     private var group: TabGroup? { store.groups.first { $0.id == groupID } }
 
@@ -348,7 +348,7 @@ struct PermissionButtons: View {
     @EnvironmentObject var store: Store
     let tabID: UUID
     @ObservedObject private var codex = CodexManager.shared
-    @State private var details = false
+    @ViewState private var details = false
 
     var body: some View {
         let shown = codex.approval(for: tabID)

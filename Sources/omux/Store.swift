@@ -11,10 +11,13 @@ final class Store: ObservableObject {
     static let shared = Store()
 
     @Published var groups: [TabGroup]
+    @Published var canvas: CanvasWorkspace
     @Published var selectedTabID: UUID? {
         didSet {
             // Deferred: this fires inside the List's selection update.
             guard let id = selectedTabID else { return }
+            if let group = group(containing: id), canvas.projectID != group.id { canvas.projectID = group.id }
+            if canvas.maximizedID != nil { canvas.maximizedID = id }
             DispatchQueue.main.async { [weak self] in
                 self?.clearAttention(id)
                 self?.refreshBusy(id)
@@ -65,6 +68,9 @@ final class Store: ObservableObject {
             groups = [TabGroup(name: "Default", tabs: [TabItem(name: "Session 1")])]
         }
         self.groups = groups
+        var canvas = saved?.canvas ?? CanvasWorkspace()
+        canvas.reconcile(groups: groups)
+        self.canvas = canvas
         let allIDs = Set(groups.flatMap { $0.tabs.map(\.id) })
         if let sel = saved?.selectedTabID, allIDs.contains(sel) {
             selectedTabID = sel
@@ -72,6 +78,17 @@ final class Store: ObservableObject {
             selectedTabID = groups.first(where: { !$0.tabs.isEmpty })?.tabs.first?.id
         }
 
+        if let focused = self.canvas.maximizedID, let group = groups.first(where: { $0.tabs.contains(where: { $0.id == focused }) }) {
+            self.canvas.projectID = group.id
+            selectedTabID = focused
+        } else if let id = self.canvas.projectID, let group = groups.first(where: { $0.id == id }) {
+            if !group.tabs.contains(where: { $0.id == selectedTabID }) { selectedTabID = group.tabs.first?.id }
+        } else { self.canvas.projectID = selectedTabID.flatMap { id in groups.first(where: { $0.tabs.contains(where: { $0.id == id }) })?.id } }
+
+        $canvas.dropFirst()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.save() }
+            .store(in: &cancellables)
         $groups.dropFirst()
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.save() }
@@ -142,7 +159,8 @@ final class Store: ObservableObject {
     var selectedProvider: SessionProvider { selectedTab.map(provider(of:)) ?? .shell }
 
     var selectedGroup: TabGroup? {
-        selectedTabID.flatMap(group(containing:)) ?? groups.first
+        canvas.projectID.flatMap { id in groups.first(where: { $0.id == id }) }
+            ?? selectedTabID.flatMap(group(containing:)) ?? groups.first
     }
 
     var allTabs: [(tab: TabItem, group: TabGroup)] {
@@ -181,6 +199,10 @@ final class Store: ObservableObject {
     private func makeTerminal(tab: TabItem, group: TabGroup, command: String? = nil) -> TermView {
         let view = TermView(tabID: tab.id)
         terminals[tab.id] = view
+        view.onFocus = { [weak self] in
+            guard let self, self.selectedTabID != tab.id else { return }
+            self.selectedTabID = tab.id
+        }
         // A replaced view (restart) still reports its exit; only the current one may update the tab.
         view.onEvent = { [weak self, weak view] event in
             guard let self, let view, self.terminals[tab.id] === view else { return }
@@ -606,7 +628,7 @@ final class Store: ObservableObject {
         guard tab(id) != nil else { return }
         AppDelegate.openWindow?(id: "main")
         NSApp.activate()
-        selectedTabID = id
+        focusSession(id)
     }
 
     private func isWatching(_ id: UUID) -> Bool {
@@ -695,9 +717,11 @@ final class Store: ObservableObject {
         if openAgent?.tabID == id { openAgent = nil }
         if openCodexAgent?.tabID == id { openCodexAgent = nil }
         groups[loc.group].tabs.remove(at: loc.tab)
+        canvas.projects[groups[loc.group].id]?.minimized.remove(id)
+        if canvas.maximizedID == id { canvas.maximizedID = nil }
         if selectedTabID == id {
             let siblings = groups[loc.group].tabs
-            selectedTabID = siblings.isEmpty ? allTabs.first?.tab.id : siblings[min(loc.tab, siblings.count - 1)].id
+            selectedTabID = siblings.isEmpty ? nil : siblings[min(loc.tab, siblings.count - 1)].id
         }
     }
 
@@ -742,6 +766,8 @@ final class Store: ObservableObject {
         let tab = groups[loc.group].tabs.remove(at: loc.tab)
         groups[gi].tabs.append(tab)
         groups[gi].isCollapsed = false
+        canvas.projects[groups[loc.group].id]?.minimized.remove(id)
+        if selectedTabID == id { canvas.projectID = groupID }
     }
 
     // MARK: Groups
@@ -767,6 +793,7 @@ final class Store: ObservableObject {
         }
         for tab in groups[gi].tabs { closeTab(tab.id) }
         groups.remove(at: gi)
+        canvas.reconcile(groups: groups)
         if groups.isEmpty { newGroup() }
     }
 
@@ -830,20 +857,20 @@ final class Store: ObservableObject {
 
     func selectIndex(_ index: Int) {
         guard let group = selectedGroup, group.tabs.indices.contains(index) else { return }
-        selectedTabID = group.tabs[index].id
+        focusSession(group.tabs[index].id)
     }
 
     func selectRelative(_ offset: Int) {
-        let tabs = allTabs.map(\.tab.id)
+        let tabs = selectedGroup?.tabs.map(\.id) ?? []
         guard !tabs.isEmpty else { return }
         let current = selectedTabID.flatMap(tabs.firstIndex(of:)) ?? 0
-        selectedTabID = tabs[(current + offset + tabs.count) % tabs.count]
+        focusSession(tabs[(current + offset + tabs.count) % tabs.count])
     }
 
     // MARK: Persistence
 
     private func save() {
-        Persistence.save(Workspace(groups: groups, selectedTabID: selectedTabID))
+        Persistence.save(Workspace(groups: groups, selectedTabID: selectedTabID, canvas: canvas))
     }
 
     func applyAppearance() {
@@ -857,5 +884,79 @@ final class Store: ObservableObject {
         codexStarts.values.forEach { $0.cancel() }
         CodexManager.shared.shutdown()
         terminals.values.forEach(killTree)
+    }
+}
+
+
+extension Store {
+    var attentionSessions: [(tab: TabItem, group: TabGroup)] {
+        allTabs.filter { CanvasSessionState(runtime[$0.tab.id] ?? TabRuntime(exited: true)).needsAttention }
+    }
+
+    func selectProject(_ id: UUID) {
+        guard let group = groups.first(where: { $0.id == id }) else { return }
+        showAllWindows()
+        canvas.projectID = id
+        if !group.tabs.contains(where: { $0.id == selectedTabID }) { selectedTabID = group.tabs.first?.id }
+    }
+
+    func focusSession(_ id: UUID) {
+        guard let group = group(containing: id) else { return }
+        canvas.projects[group.id]?.minimized.remove(id)
+        canvas.projectID = group.id
+        canvas.maximizedID = id
+        selectedTabID = id
+    }
+
+    func showAllWindows() {
+        canvas.maximizedID = nil
+        if NSApp.keyWindow?.firstResponder is TermView { NSApp.keyWindow?.makeFirstResponder(nil) }
+    }
+
+    func minimizeSession(_ id: UUID) {
+        guard let group = group(containing: id) else { return }
+        var state = canvas.project(group.id)
+        state.minimized.insert(id)
+        canvas.projects[group.id] = state
+        if canvas.maximizedID == id { showAllWindows() }
+        if let terminal = NSApp.keyWindow?.firstResponder as? TermView, terminal.tabID == id {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+        if selectedTabID == id { selectedTabID = group.tabs.first(where: { !state.minimized.contains($0.id) })?.id }
+    }
+
+    func restoreSession(_ id: UUID) {
+        guard let group = group(containing: id) else { return }
+        canvas.projects[group.id]?.minimized.remove(id)
+        selectedTabID = id
+    }
+
+    func minimizeIdle(in group: TabGroup) {
+        for tab in group.tabs {
+            let state = CanvasSessionState(runtime[tab.id] ?? TabRuntime(exited: true))
+            if state == .idle || state == .ended { minimizeSession(tab.id) }
+        }
+    }
+
+    func setWindowSize(_ size: GridWindowSize, in id: UUID) {
+        var state = canvas.project(id)
+        state.size = size
+        canvas.projects[id] = state
+    }
+
+    func swapWindows(_ source: UUID, _ target: UUID) {
+        guard let a = location(of: source), let b = location(of: target), a.group == b.group else { return }
+        groups[a.group].tabs.swapAt(a.tab, b.tab)
+    }
+
+    func togglePinned(_ id: UUID) {
+        if !canvas.pinnedProjects.insert(id).inserted { canvas.pinnedProjects.remove(id) }
+    }
+
+    func nextAttentionSession() {
+        let ids = attentionSessions.map(\.tab.id)
+        guard !ids.isEmpty else { return }
+        let index = selectedTabID.flatMap(ids.firstIndex(of:)).map { ($0 + 1) % ids.count } ?? 0
+        focusSession(ids[index])
     }
 }

@@ -6,7 +6,7 @@ struct UsageView: View {
     @EnvironmentObject var store: Store
     @StateObject private var monitor = UsageMonitor()
     @ObservedObject private var codex = CodexManager.shared
-    @State private var hovered: String?
+    @ViewState private var hovered: String?
     @AppStorage(Prefs.usageInterval) private var usageInterval = 300.0
 
     /// Codex sessions show Codex's limits; every other session shows Claude's, as before.
