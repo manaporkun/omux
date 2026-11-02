@@ -332,10 +332,39 @@ struct TerminalHost: NSViewRepresentable {
     final class Container: NSView {
         weak var terminal: TermView?
         var focusRequested = false
+        private var wheelMonitor: Any?
+
+        deinit {
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            if let wheelMonitor {
+                NSEvent.removeMonitor(wheelMonitor)
+                self.wheelMonitor = nil
+            }
+            if window != nil {
+                // SwiftUI's enclosing grid scroll view can capture wheel gestures
+                // before the embedded AppKit terminal receives them. Route only
+                // events over this terminal, including gesture end/momentum events.
+                wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                    guard let terminal = self?.wheelTarget(for: event) else { return event }
+                    terminal.scrollWheel(with: event)
+                    return nil
+                }
+            }
             focusIfReady()
+        }
+
+        func wheelTarget(for event: NSEvent) -> TermView? {
+            guard event.type == .scrollWheel, let window, event.window === window,
+                  window.attachedSheet == nil, !isHiddenOrHasHiddenAncestor,
+                  let terminal, terminal.superview === self,
+                  !terminal.isHiddenOrHasHiddenAncestor else { return nil }
+            let point = terminal.convert(event.locationInWindow, from: nil)
+            guard terminal.visibleRect.contains(point) else { return nil }
+            return terminal
         }
 
         func focusIfReady() {
