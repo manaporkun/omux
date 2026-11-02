@@ -328,14 +328,19 @@ private struct TerminalTile: View {
     let group: TabGroup
     let theme: Theme
     @ViewState private var targeted = false
+    @ViewState private var hovered = false
 
     private var runtime: TabRuntime { store.runtime[tab.id] ?? TabRuntime(exited: true) }
     private var state: CanvasSessionState { CanvasSessionState(runtime) }
 
+    private var isActive: Bool { store.activeTerminalID == tab.id }
+    private var needsAttention: Bool { state.needsAttention || runtime.needsAttention }
+    private var accent: Color { targeted ? .accentColor : needsAttention ? .orange : .accentColor }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
-                Image(systemName: "line.3.horizontal")
+                Image(systemName: "circle.grid.2x3.fill")
                     .foregroundStyle(.tertiary)
                     .frame(width: 14, height: 24)
                     .contentShape(Rectangle())
@@ -344,7 +349,6 @@ private struct TerminalTile: View {
                     }
                     .help("Drag this title bar onto another card to swap slots")
                     .accessibilityLabel("Drag to swap \(tab.name) with another card")
-                SessionStateDot(state: state)
                 if runtime.needsAttention {
                     Image(systemName: "bell.badge.fill").foregroundStyle(.orange)
                         .accessibilityLabel("Unread session activity")
@@ -357,32 +361,51 @@ private struct TerminalTile: View {
                             if store.activeTerminalID == tab.id {
                                 Image(systemName: "keyboard").foregroundStyle(Color.accentColor)
                             }
-                            Text(tab.name).fontWeight(.semibold).lineLimit(1)
+                            Text(tab.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                         }
                     }
                     .help("Focus \(tab.name) for typing without changing the grid")
                     .accessibilityLabel("Focus terminal \(tab.name)")
                     .accessibilityValue(store.activeTerminalID == tab.id ? "Session command target" : "Not active")
                 }
-                Text(store.provider(of: tab).label).foregroundStyle(.tertiary).font(.system(size: 9)).lineLimit(1)
+                Text(store.provider(of: tab).label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
+                    .fixedSize()
                 Spacer(minLength: 0)
-                Text(state.label).foregroundStyle(state.needsAttention ? .orange : .secondary).font(.system(size: 10)).lineLimit(1)
-                Button { store.minimizeSession(tab.id) } label: { Image(systemName: "minus") }
-                    .help("Minimize to the shelf")
-                Button { store.maximizeSession(tab.id) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .help("Maximize \(tab.name) (⇧⌘M for the active terminal)")
-                    .accessibilityLabel("Maximize \(tab.name)")
-                Button { store.requestClose(tab.id) } label: {
+                HStack(spacing: 5) {
+                    SessionStateDot(state: state)
+                    Text(state.label).font(.system(size: 10, weight: .medium)).lineLimit(1)
+                }
+                .foregroundStyle(state.needsAttention ? Color.orange : Color.secondary)
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .background((state.needsAttention ? Color.orange : Color.primary).opacity(0.06), in: Capsule())
+                .layoutPriority(1)
+                HStack(spacing: 2) {
+                    Button { store.minimizeSession(tab.id) } label: { Image(systemName: "minus").frame(width: 24, height: 24).contentShape(Rectangle()) }
+                        .help("Minimize to the shelf")
+                    Button { store.maximizeSession(tab.id) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 24, height: 24).contentShape(Rectangle()) }
+                        .help("Maximize \(tab.name) (⇧⌘M for the active terminal)")
+                        .accessibilityLabel("Maximize \(tab.name)")
+                    Button { store.requestClose(tab.id) } label: {
                         Image(systemName: "xmark")
                             .frame(width: 20, height: 24)
                             .contentShape(Rectangle())
                     }
                     .help("Close session")
                     .accessibilityLabel("Close session \(tab.name)")
+                }
+                .foregroundStyle(.secondary)
+                .background(Color.primary.opacity(hovered ? 0.06 : 0.025), in: RoundedRectangle(cornerRadius: 6))
             }
             .font(.system(size: 11)).buttonStyle(.plain)
-            .padding(.horizontal, 10).frame(height: 32)
-            .background(Color(nsColor: theme.chrome))
+            .padding(.horizontal, 12).frame(height: 42)
+            .background {
+                Color(nsColor: theme.chrome)
+                if isActive || needsAttention || targeted { accent.opacity(theme.isLight ? 0.06 : 0.08) }
+            }
             .contentShape(Rectangle())
             .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
             Divider()
@@ -424,11 +447,11 @@ private struct TerminalTile: View {
             }
         }
         .background(Color(nsColor: theme.background))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(targeted || store.activeTerminalID == tab.id ? Color.accentColor : state.needsAttention || runtime.needsAttention ? Color.orange : Color.primary.opacity(0.14),
-                              lineWidth: state.needsAttention || runtime.needsAttention || targeted || store.activeTerminalID == tab.id ? 2 : 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(isActive || needsAttention || targeted ? accent.opacity(0.8) : Color.primary.opacity(hovered ? 0.22 : 0.12),
+                              lineWidth: isActive || targeted ? 1.5 : 1)
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .top) {
@@ -437,11 +460,12 @@ private struct TerminalTile: View {
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .background(.regularMaterial, in: Capsule())
-                    .padding(.top, 36)
+                    .padding(.top, 48)
                     .allowsHitTesting(false)
             }
         }
-        .shadow(color: .black.opacity(0.12), radius: 7, y: 3)
+        .shadow(color: .black.opacity(theme.isLight ? 0.08 : 0.22), radius: isActive ? 12 : 6, y: 4)
+        .onHover { hovered = $0 }
         .dropDestination(for: String.self) { items, _ in
             guard let value = items.first, let source = UUID(uuidString: value), store.group(containing: source)?.id == group.id else { return false }
             store.swapWindows(source, tab.id)
@@ -525,7 +549,7 @@ private struct SessionCardContextRow: View {
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
             .buttonStyle(.plain)
-            .padding(.horizontal, 10).frame(height: 24)
+            .padding(.horizontal, 12).frame(height: 28)
             .background(Color(nsColor: theme.chrome))
             .overlay(alignment: .bottom) { Divider() }
         }
