@@ -301,10 +301,13 @@ struct GroupEditSheet: View {
     @ViewState private var provider = SessionProvider.claude
     @ViewState private var useWorktrees = false
     @ViewState private var worktreeSetup = ""
+    @ViewState private var icon = ProjectIcon.folder
+    @ViewState private var color = TabColor.none
 
     var body: some View {
         Form {
             TextField("Name", text: $name)
+            ProjectIdentityPicker(icon: $icon, color: $color, name: name)
             HStack {
                 TextField("Folder", text: $directory, prompt: Text("~"))
                 Button("Choose…") { if let dir = chooseDirectory(current: directory) { directory = dir } }
@@ -331,9 +334,12 @@ struct GroupEditSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             guard let group = store.groups.first(where: { $0.id == groupID }) else { return }
             name = group.name
+            icon = group.icon
+            color = group.color
             directory = group.directory ?? ""
             command = group.command ?? ""
             provider = command == group.provider.command ? group.provider : .custom
@@ -344,6 +350,8 @@ struct GroupEditSheet: View {
 
     private func save() {
         store.updateGroup(groupID) { group in
+            group.icon = icon
+            group.color = color
             group.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? group.name : name
             group.directory = directory.isEmpty ? nil : directory
             group.command = provider == .custom ? command : provider.command

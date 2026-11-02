@@ -211,6 +211,7 @@ struct GroupHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            ProjectIdentityIcon(group: group)
             if store.renamingID == group.id {
                 RenameField(initial: group.name) { store.rename(group.id, to: $0) }
             } else {

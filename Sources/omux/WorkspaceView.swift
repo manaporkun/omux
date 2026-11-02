@@ -137,7 +137,7 @@ struct WorkspaceView: View {
 
     private func projectHeader(_ group: TabGroup) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "rectangle.grid.2x2").foregroundStyle(.secondary)
+            ProjectIdentityIcon(group: group)
             Text(group.name).fontWeight(.semibold).lineLimit(1)
             Text("\(group.tabs.count) sessions").font(.caption).foregroundStyle(.tertiary)
             if let target = store.commandTarget {
@@ -227,6 +227,7 @@ struct WorkspaceView: View {
                     .help("Previous session (⇧⌘[)")
                 Button { store.selectRelative(1) } label: { Image(systemName: "chevron.right") }
                     .help("Next session (⇧⌘])")
+                ProjectIdentityIcon(group: group)
                 Text(group.name).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 if !store.attentionSessions.isEmpty {

@@ -6,6 +6,9 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Added
 
+- Projects have configurable system icons and colors under Edit Project, with a preview and reset.
+  Appearance persists in the workspace and is shared by the sidebar and project headers without
+  changing session status styling.
 - Drag projects to an insertion line in the sidebar to reorder them. Custom order persists across
   relaunches while preserving pinned groups and filtered-out project slots.
 - The workspace sidebar shows Codex subscription limits, reset times, and freshness details.

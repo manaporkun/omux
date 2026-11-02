@@ -115,6 +115,8 @@ struct TabGroup: Identifiable, Codable, Hashable {
     var command: String? = "claude"
     var provider: SessionProvider = .claude
     var isCollapsed = false
+    var icon: ProjectIcon = .folder
+    var color: TabColor = .none
     /// New sessions get their own git worktree.
     var useWorktrees = false
     /// Runs in each new worktree before the session's command, e.g. to copy ignored
@@ -136,6 +138,8 @@ struct TabGroup: Identifiable, Codable, Hashable {
         command = try c.decodeIfPresent(String.self, forKey: .command)
         provider = (try? c.decodeIfPresent(SessionProvider.self, forKey: .provider)) ?? SessionProvider.infer(command: command)
         isCollapsed = try c.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
+        icon = (try? c.decodeIfPresent(ProjectIcon.self, forKey: .icon)) ?? .folder
+        color = (try? c.decodeIfPresent(TabColor.self, forKey: .color)) ?? .none
         useWorktrees = try c.decodeIfPresent(Bool.self, forKey: .useWorktrees) ?? false
         worktreeSetup = try c.decodeIfPresent(String.self, forKey: .worktreeSetup) ?? ""
         tabs = try c.decodeIfPresent([TabItem].self, forKey: .tabs) ?? []

@@ -15,7 +15,12 @@ with the total and a refinement cue; an attention-only scope is available for in
 
 - Projects start in alphabetical order, with pinned projects first. Drag a project to a gap and
   release at the insertion line to move it within the same pin group.
-  Custom order survives relaunch, and filtered-out projects keep their positions. Their context menu includes
+  Custom order survives relaunch, and filtered-out projects keep their positions.
+  **Edit Project…** in the project context menu includes a live appearance preview, 12 system icons,
+  and a named color palette. Save applies the identity to the sidebar and project headers; Cancel
+  discards changes and Reset appearance restores the default folder and color. Pinned projects keep
+  their own pin indicator, and session status remains separate. Appearance survives relaunch and
+  does not alter sessions or their order. Their context menu includes
   pinning, editing, and opening a session. Status never reorders a project.
   Projects with more than eight sessions use a bounded textual total/running/attention summary instead
   of status dots, leaving the name on its own line. Smaller selected projects retain labeled dots.
@@ -328,3 +333,8 @@ For a read-only live context display check, launch the Dev app with
 card after attachment and writes `context-check.json` and `context-card.png`, without submitting
 terminal input. `OMUX_CONTEXT_LIVE_ROOT=<verified-shell-pid> swift test --filter CodexTerminalContextTests`
 opts into a read-only process/catalog integration check. Default unit tests skip that live check.
+
+`OMUX_PROJECT_IDENTITY_CHECK=1` with the same three-project disposable shell fixture opens the
+native Edit Project sheet and exercises icon/color choices, Save, Cancel, and Reset. It verifies
+persisted appearance, symbol availability, and unchanged terminal/session identity, and writes
+`project-identity-checks.json` plus editor/project snapshots. This check never uses real projects.

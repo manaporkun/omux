@@ -163,11 +163,14 @@ struct ProjectSidebar: View {
         return Button { store.selectProject(group.id) } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
-                    Image(systemName: store.canvas.pinnedProjects.contains(group.id) ? "pin.fill" : "folder")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    ProjectIdentityIcon(group: group).font(.system(size: 11))
                     if store.renamingID == group.id {
                         RenameField(initial: group.name) { store.rename(group.id, to: $0) }
                     } else { Text(group.name).fontWeight(selected ? .semibold : .regular).lineLimit(1) }
+                    if store.canvas.pinnedProjects.contains(group.id) {
+                        Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(.secondary)
+                            .accessibilityLabel("Pinned project")
+                    }
                     Spacer(minLength: 2)
                     if states.count <= 8 && attention > 0 {
                         Text("\(attention)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
