@@ -4,6 +4,13 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- The sidebar footer shows the app version, a local build number that counts up on each build, and
+  the commit it was built from, so the installed app and omux Dev can be told apart.
+- `./build.sh --no-updates` installs a build that never checks for updates, so a fork's build isn't
+  replaced by the published release.
+
 ### Changed
 
 - New terminals, project opening, and workspace recovery no longer start configured agents implicitly.

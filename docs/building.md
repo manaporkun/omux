@@ -14,6 +14,14 @@ open /Applications/omux.app
 builds and installs **omux Beta** next to the release app instead, with its own bundle id, preferences and workspace, so you can try a branch without touching your sessions. On its first launch it copies the release app's settings.
 
 ```sh
+./build.sh --no-updates
+```
+
+installs a build that never checks for updates: Sparkle would otherwise replace a fork's build with the published release. Help › Check for Updates… is disabled in it.
+
+Local builds (`./build.sh` and `scripts/preview-workspace.sh`) show their version, a build number and the commit at the bottom of the sidebar, e.g. `0.8.0 (14) · a920b2f`. The build number counts up on every local build, shared by the installed app and omux Dev and kept in `build/.build-number`; a `+` after the commit marks uncommitted changes.
+
+```sh
 ./build.sh --dist
 ```
 

@@ -122,7 +122,8 @@ struct ProjectSidebar: View {
                 Circle().fill(.green).frame(width: 5, height: 5)
                 Text("\(store.runningSessionCount) live sessions").monospacedDigit()
                 Spacer()
-                Text("Local").foregroundStyle(.tertiary)
+                Text(AppVersion.label).foregroundStyle(.tertiary).monospacedDigit().lineLimit(1)
+                    .textSelection(.enabled).help("omux \(AppVersion.label)")
             }
             .font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 15).padding(.vertical, 12)
         }

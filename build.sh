@@ -3,6 +3,8 @@
 #   ./build.sh            builds and installs /Applications/omux.app, signed for development.
 #   ./build.sh --beta     builds and installs "omux Beta" instead: a separate app with its own
 #                         preferences and workspace, so you can try a branch next to the release build.
+#   ./build.sh --no-updates   installs a build that never checks for updates, so Sparkle doesn't
+#                         replace it with the published release (for running your own fork's build).
 #   ./build.sh --dist     builds a distributable release: signed with the Developer ID certificate,
 #                         hardened runtime, notarized and stapled; produces build/omux-<version>.dmg
 #                         and build/omux-<version>.zip. Doesn't install anything.
@@ -19,12 +21,14 @@ NAME=omux
 BUNDLE_ID=net.pf1.omux
 MODE=install
 NOTARIZE=1
+UPDATES=1
 NOTARY_PROFILE=${NOTARY_PROFILE:-omux-notary}
 for arg in "$@"; do
   case "$arg" in
     --beta) NAME="omux Beta"; BUNDLE_ID=net.pf1.omux.beta ;;
     --dist) MODE=dist ;;
     --no-notarize) NOTARIZE=0 ;;
+    --no-updates) UPDATES=0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -39,6 +43,17 @@ cp .build/release/omux-session-relay "$APP/Contents/MacOS/omux-session-relay"
 cp Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" -c "Set :CFBundleName $NAME" \
   -c "Set :NSServices:0:NSMenuItem:default Open in $NAME" -c "Set :NSServices:0:NSPortName $NAME" "$APP/Contents/Info.plist"
+# The commit shown in the sidebar footer; "+" marks uncommitted changes.
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+[[ -n "$(git status --porcelain 2>/dev/null)" ]] && COMMIT="$COMMIT+"
+/usr/libexec/PlistBuddy -c "Add :OmuxCommit string $COMMIT" "$APP/Contents/Info.plist"
+# Local builds count up on each build, shown next to the version; releases keep their version only.
+if [[ "$MODE" == install ]]; then
+  /usr/libexec/PlistBuddy -c "Add :OmuxBuild string $(sh scripts/next-build-number.sh)" "$APP/Contents/Info.plist"
+fi
+if [[ "$UPDATES" == 0 ]]; then
+  /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" -c "Set :SUEnableAutomaticChecks false" "$APP/Contents/Info.plist"
+fi
 cp Resources/omux.icns "$APP/Contents/Resources/"
 # The light/dark Liquid Glass icon for macOS 26, compiled from Icon Composer's omux.icon into
 # Assets.car. CFBundleIconName makes macOS 26 use it; older macOS keeps using omux.icns. Without
