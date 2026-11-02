@@ -41,6 +41,7 @@ omux turns that into a dashboard.
 | **Worktree sessions** (⌥⌘T) | A session on its own branch and folder, so parallel agents never touch each other's files. A per-project setup command runs first, like `cp "$OMUX_REPO/.env" . && npm install`. |
 | **Pull request status** | With the [GitHub CLI](https://cli.github.com): checks, reviews and merges next to the session. Failing checks' logs sent to the agent in one click. Merged pull requests offer to clean up the worktree. |
 | **Safe folder recovery and cleanup** | Missing folders offer Locate folder or an explicit home shell, never a silent agent fallback. Failed worktree cleanup retains its stopped card with retry/reveal actions until resolved. |
+| **Git History** (⌥⌘4) | Read-only commit/branch graph with merge lanes, tags, HEAD, commit details, changed files, and automatic refresh. |
 | **Changes** (⌥⌘2) | The session's diff against its base branch. Click a line to leave a note, then send all notes to the agent in one message. |
 | **Files** (⌥⌘1) | The session's folder, with previews of code, Markdown, images, PDFs and anything Quick Look shows. ⌘-click a path in the terminal to preview it. |
 | **Browser** (⌥⌘3) | A web view per session that opens the local server the session prints. Pick an element to send its HTML, styles and a screenshot to the prompt. |
@@ -92,7 +93,7 @@ Beta builds, distribution builds and tests are in [docs/building.md](docs/buildi
 | Next / previous session | ⇧⌘] / ⇧⌘[ |
 | Session 1–9 in the current project | ⌘1 … ⌘9 |
 | Maximize active terminal / restore grid | ⇧⌘M |
-| Right panel / Files / Changes / Browser | ⌥⌘F / ⌥⌘1 / ⌥⌘2 / ⌥⌘3 |
+| Right panel / Files / Changes / Browser / Git History | ⌥⌘F / ⌥⌘1 / ⌥⌘2 / ⌥⌘3 / ⌥⌘4 |
 | Terminal font bigger / smaller / default | ⌘+ or ⌘= / ⌘− / ⌘0 |
 
 Session commands target the visibly active terminal, not a hidden retained selection. Escape remains

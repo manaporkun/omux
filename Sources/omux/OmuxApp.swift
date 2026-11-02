@@ -401,6 +401,7 @@ struct AppCommands: Commands {
             Button("Files") { store.showPanel(.files) }.keyboardShortcut("1", modifiers: [.command, .option])
             Button("Changes") { store.showPanel(.changes) }.keyboardShortcut("2", modifiers: [.command, .option])
             Button("Browser") { store.showPanel(.browser) }.keyboardShortcut("3", modifiers: [.command, .option])
+            Button("Git History") { store.showPanel(.history) }.keyboardShortcut("4", modifiers: [.command, .option])
             Divider()
             Button("Bigger") { Fonts.adjustSize(by: 1) }.keyboardShortcut("+")
             Button("Smaller") { Fonts.adjustSize(by: -1) }.keyboardShortcut("-")
@@ -472,6 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.activate()
         _ = Updater.shared
         #if DEBUG
+        GitHistoryChecks.runIfRequested()
         ProjectIdentityChecks.runIfRequested()
         SidebarInteractionChecks.runIfRequested()
         WorkspaceSmokeChecks.runIfRequested()

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum PanelTab: String, CaseIterable {
-    case files, changes, browser
+    case files, changes, browser, history
 }
 
 /// The right panel: Files, Changes and Browser for the selected session.
@@ -14,15 +14,21 @@ struct RightPanel: View {
 
     private var current: PanelTab { PanelTab(rawValue: tab) ?? .files }
 
+    private var historyDirectory: String? {
+        guard let group = store.selectedGroup else { return nil }
+        if let tab = store.selectedTab, group.tabs.contains(where: { $0.id == tab.id }) {
+            return store.directory(of: tab).map { ($0 as NSString).expandingTildeInPath }
+        }
+        return group.directory.map { ($0 as NSString).expandingTildeInPath }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 2) {
-                button(.files, "Files", "doc", shortcut: "1")
-                button(.changes, "Changes", "plusminus", shortcut: "2",
-                       badge: changes.tabID == store.selectedTabID ? changes.files.count : 0)
-                button(.browser, "Browser", "globe", shortcut: "3")
-                Spacer()
+            ViewThatFits(in: .horizontal) {
+                tabs(compact: false).fixedSize(horizontal: true, vertical: false)
+                tabs(compact: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 6)
             .frame(height: 28)
             .background(Color(nsColor: theme.chrome))
@@ -39,6 +45,9 @@ struct RightPanel: View {
                 if current == .changes {
                     ChangesPanel(theme: theme)
                 }
+                if current == .history {
+                    GitHistoryPanel(directory: historyDirectory, theme: theme)
+                }
                 if current == .browser {
                     if let id = store.selectedTabID {
                         BrowserPanel(session: store.browser(for: id), theme: theme).id(id)
@@ -50,12 +59,23 @@ struct RightPanel: View {
         }
     }
 
-    private func button(_ value: PanelTab, _ title: String, _ icon: String, shortcut: String, badge: Int = 0) -> some View {
+    private func tabs(compact: Bool) -> some View {
+        HStack(spacing: 2) {
+            button(.files, "Files", "doc", shortcut: "1", compact: compact)
+            button(.changes, "Changes", "plusminus", shortcut: "2",
+                   badge: changes.tabID == store.selectedTabID ? changes.files.count : 0, compact: compact)
+            button(.browser, "Browser", "globe", shortcut: "3", compact: compact)
+            button(.history, "History", "arrow.triangle.branch", shortcut: "4", compact: compact)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func button(_ value: PanelTab, _ title: String, _ icon: String, shortcut: String, badge: Int = 0, compact: Bool = false) -> some View {
         let selected = current == value
         return Button { tab = value.rawValue } label: {
             HStack(spacing: 5) {
                 Image(systemName: icon).imageScale(.small)
-                Text(title)
+                if !compact { Text(title).lineLimit(1) }
                 if badge > 0 {
                     Text("\(badge)")
                         .font(.system(size: 9, weight: .semibold))
@@ -73,5 +93,6 @@ struct RightPanel: View {
         }
         .buttonStyle(.plain)
         .help("\(title) (⌥⌘\(shortcut))")
+        .accessibilityLabel(title)
     }
 }

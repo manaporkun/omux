@@ -342,3 +342,40 @@ opts into a read-only process/catalog integration check. Default unit tests skip
 native Edit Project sheet and exercises icon/color choices, Save, Cancel, and Reset. It verifies
 persisted appearance, symbol availability, and unchanged terminal/session identity, and writes
 `project-identity-checks.json` plus editor/project snapshots. This check never uses real projects.
+
+## Git history
+
+Open **History** in the right panel, click the branch icon in the project header, or press **⌥⌘4**.
+History follows the selected session's configured checkout (or the selected project's folder) and
+shows its repository root and current branch. Detached and unborn HEAD states are explicit.
+
+The graph displays topological commit ancestry, merge lanes, local/remote branch names, tags, and
+HEAD. Click a row or use Up/Down after selecting the graph to inspect the commit message, author,
+date, parent IDs, references, and changed files. Merge files are compared against the first parent;
+initial commits show their initial files. All paths are parsed without Git's display quoting, so
+unusual filenames remain intact. Large commit messages/file lists are bounded and labeled.
+
+**All branches** includes local history and the selected checkout's HEAD, including detached commits.
+**HEAD ancestry** narrows the graph to HEAD's ancestry. History starts with 200 commits and **Load
+more** adds 200 at a time, up to 2,000. Remaining ancestry is represented by continuation lanes;
+use the narrower scope when the loaded-history limit is reached. Wide graphs scroll horizontally.
+The graph/details divider and the existing right-panel divider can be resized. Narrow panel tabs
+fall back to icons with accessible labels instead of squeezing their text.
+
+Repository work, graph construction, and commit-detail reads run off the main thread. Folder,
+checkout Git-directory, and common Git-directory watchers refresh history, including changes from
+other linked worktrees. Refresh retains a selected commit while it remains loaded. A ten-second
+fallback covers missed events and newly initialized repositories. Closing the panel stops monitoring.
+Non-Git folders and empty repositories have dedicated states, and errors are shown without silently
+switching folders. Inspection never fetches, stages, checks out, or changes Git objects/index/refs.
+
+`GitHistoryTests` creates disposable real repositories to check merges, references, detached HEAD,
+empty/non-Git projects, filenames with tabs/newlines, bounded loading, shared-worktree refresh,
+rapid scope changes, and unchanged repository state. `GitGraphLayoutTests` covers linear, merged,
+octopus, disconnected, and truncated histories. `OMUX_GIT_HISTORY_CHECK=1` plus a disposable
+`OMUX_WORKSPACE_DIRECTORY` runs native graph checks. Its three shell-only projects must be named
+`History check Repository`, `History check Nonrepo`, and `History check Empty`, with folders under
+the disposable workspace. The first repository must have a visible merge below HEAD. The check
+clicks that merge, sends a real Down key, verifies details and repository/process identity, switches
+through empty/non-Git states, then commits one fixture file to verify refresh and selection retention.
+It writes `git-history-checks.json` and graph snapshots. Never use real projects for this fixture.

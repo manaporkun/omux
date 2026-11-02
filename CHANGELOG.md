@@ -6,6 +6,8 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Added
 
+- Read-only Git History in the right panel (⌥⌘4), with branch/merge lanes, HEAD, tags, commit details,
+  changed files, bounded history loading, and automatic refresh across linked worktrees.
 - Project rows expose Edit, Pin/Unpin, and New Session buttons on hover and on the selected project,
   with visible backgrounds and hover/pressed feedback.
 - Projects have configurable system icons and colors under Edit Project, with a preview and reset.

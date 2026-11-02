@@ -159,6 +159,8 @@ struct WorkspaceView: View {
                 Button("Session in Worktree…") { store.newWorktreeGroupID = group.id }
             } label: { Label("New Session", systemImage: "plus") }
             .menuStyle(.borderlessButton).fixedSize()
+            Button { store.showPanel(.history) } label: { Image(systemName: "arrow.triangle.branch") }
+                .buttonStyle(.plain).help("Git History (⌥⌘4)").accessibilityLabel("Open Git History")
             Button { showFiles.toggle() } label: { Image(systemName: "sidebar.trailing") }
                 .buttonStyle(.plain).foregroundStyle(showFiles ? .primary : .secondary)
                 .help("Files panel (⌥⌘F)")
