@@ -1049,9 +1049,10 @@ final class Store: ObservableObject {
 
     private func applyStatus(_ state: TabRuntime.StatusState?, kind: String?, message: String?, children: [TabRuntime.StatusChild], for id: UUID) {
         let previous = runtime[id]?.statusState
+        let changed = previous != state || runtime[id]?.statusKind != kind || runtime[id]?.statusDetail != message
         update(id) {
             $0.statusState = state; $0.statusKind = kind; $0.statusDetail = message; $0.statusChildren = children
-            if state == .blocked || state == .done, !isWatching(id) { $0.needsAttention = true }
+            if changed, state == .blocked || state == .done, !isWatching(id) { $0.needsAttention = true }
         }
         if state != previous { notifyStatusChange(id) }
     }
@@ -1103,7 +1104,7 @@ final class Store: ObservableObject {
     private func clearAttention(_ id: UUID) {
         // Acknowledgment clears unread markers, never the underlying blocked/error/interrupted state.
         guard isWatching(id) else { return }
-        update(id) { $0.hasActivity = false; $0.needsAttention = false }
+        update(id) { $0.acknowledgeAttention() }
         Notifier.shared.clear(tabID: id)
     }
 
@@ -1111,6 +1112,10 @@ final class Store: ObservableObject {
         var value = runtime[id] ?? TabRuntime()
         let before = value
         mutate(&value)
+        if value.statusState != before.statusState || value.statusKind != before.statusKind ||
+            value.statusDetail != before.statusDetail || value.interrupted != before.interrupted {
+            value.attentionAcknowledged = false
+        }
         if value != before { runtime[id] = value }
     }
 
@@ -1502,7 +1507,7 @@ extension Store {
     var attentionSessions: [(tab: TabItem, group: TabGroup)] {
         allTabs.filter {
             let state = runtime[$0.tab.id] ?? TabRuntime(exited: true)
-            return state.needsAttention || CanvasSessionState(state).needsAttention
+            return state.requiresAttention
         }
     }
 
@@ -1516,7 +1521,8 @@ extension Store {
         guard let group = group(containing: id), selectedGroup?.id == group.id,
               !canvas.project(group.id).minimized.contains(id) else { return false }
         if let maximized = canvas.maximizedID { return maximized == id }
-        return canvasFilter.includes(CanvasSessionState(runtime[id] ?? TabRuntime(exited: true)))
+        let state = runtime[id] ?? TabRuntime(exited: true)
+        return canvasFilter == .needsYou ? state.requiresAttention : canvasFilter.includes(CanvasSessionState(state))
     }
 
     private func deactivateTerminal() {

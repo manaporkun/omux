@@ -38,7 +38,8 @@ struct WorkspaceView: View {
 
     private func grid(_ group: TabGroup) -> some View {
         let settings = store.canvas.project(group.id)
-        let result = CanvasFilterResult(tabs: group.tabs, minimized: settings.minimized, filter: filter, state: state)
+        let result = CanvasFilterResult(tabs: group.tabs, minimized: settings.minimized, filter: filter, state: state,
+                                       attention: { store.runtime[$0.id]?.requiresAttention == true })
         let visible = result.visible
         let shelfMatches = "\(result.matchingShelf.count) matching \(result.matchingShelf.count == 1 ? "session" : "sessions") on shelf"
         return VStack(spacing: 0) {
@@ -46,7 +47,9 @@ struct WorkspaceView: View {
             LaunchRecoverySummary()
             HStack(spacing: 6) {
                 ForEach(CanvasFilter.allCases) { item in
-                    let count = item == filter ? result.matchingCount : group.tabs.reduce(0) { $0 + (item.includes(state($1)) ? 1 : 0) }
+                    let count = item == filter ? result.matchingCount : group.tabs.reduce(0) {
+                        $0 + ((item == .needsYou ? store.runtime[$1.id]?.requiresAttention == true : item.includes(state($1))) ? 1 : 0)
+                    }
                     Button { filter = item } label: {
                         HStack(spacing: 5) {
                             Text(item.label)
@@ -232,6 +235,13 @@ struct WorkspaceView: View {
                 }
                 Button { store.minimizeSession(tab.id) } label: { Image(systemName: "minus") }
                     .help("Minimize to the shelf")
+                Button { store.requestClose(tab.id) } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 20, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .help("Close session")
+                .accessibilityLabel("Close session \(tab.name)")
             }
             .buttonStyle(.plain).font(.system(size: 11))
             .padding(.horizontal, 14).frame(height: 34)
@@ -362,6 +372,13 @@ private struct TerminalTile: View {
                 Button { store.maximizeSession(tab.id) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                     .help("Maximize \(tab.name) (⇧⌘M for the active terminal)")
                     .accessibilityLabel("Maximize \(tab.name)")
+                Button { store.requestClose(tab.id) } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 20, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .help("Close session")
+                    .accessibilityLabel("Close session \(tab.name)")
             }
             .font(.system(size: 11)).buttonStyle(.plain)
             .padding(.horizontal, 10).frame(height: 32)

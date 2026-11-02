@@ -171,6 +171,17 @@ struct TabRuntime: Equatable {
     var cwd: String?
     var hasActivity = false
     var needsAttention = false
+    var attentionAcknowledged = false
+
+    var requiresAttention: Bool {
+        needsAttention || (!attentionAcknowledged && CanvasSessionState(self).needsAttention)
+    }
+
+    mutating func acknowledgeAttention() {
+        hasActivity = false
+        needsAttention = false
+        attentionAcknowledged = true
+    }
     var exited = false
     /// A program (e.g. claude) is running in the shell, as opposed to an idle prompt.
     var busy = false

@@ -2,6 +2,27 @@ import XCTest
 @testable import omux
 
 final class SessionFinderTests: XCTestCase {
+    func testAcknowledgingAttentionClearsBadgesWithoutChangingSessionStatus() {
+        let tab = TabItem(name: "Review")
+        let group = TabGroup(name: "Project", tabs: [tab])
+        for original in [TabRuntime(needsAttention: true), TabRuntime(statusState: .blocked),
+                         TabRuntime(statusState: .error), TabRuntime(interrupted: true)] {
+            var runtime = original
+            XCTAssertTrue(runtime.requiresAttention)
+            runtime.acknowledgeAttention()
+            XCTAssertFalse(runtime.requiresAttention)
+            XCTAssertEqual(CanvasSessionState(runtime), CanvasSessionState(original))
+            XCTAssertFalse(SessionFinderMatch(tab: tab, group: group, runtime: runtime)
+                .matches(terms: [], scope: .attention))
+            let filtered = CanvasFilterResult(tabs: [tab], minimized: [], filter: .needsYou,
+                                             state: { _ in CanvasSessionState(runtime) },
+                                             attention: { _ in runtime.requiresAttention })
+            XCTAssertEqual(filtered.matchingCount, 0)
+            runtime.needsAttention = true
+            XCTAssertTrue(runtime.requiresAttention, "New activity must raise attention again")
+        }
+    }
+
     func testSearchMatchesEveryFieldAndCombinesTermsAcrossFields() {
         var tab = TabItem(name: "Payments")
         tab.worktree = Worktree(branch: "feature/refunds", base: "main", repo: "/repo")

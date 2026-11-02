@@ -151,12 +151,12 @@ struct CanvasFilterResult {
     var matchingCount: Int { visible.count + matchingShelf.count }
 
     init(tabs: [TabItem], minimized: Set<UUID>, filter: CanvasFilter,
-         state: (TabItem) -> CanvasSessionState) {
+         state: (TabItem) -> CanvasSessionState, attention: ((TabItem) -> Bool)? = nil) {
         var visible: [TabItem] = []
         var shelf: [TabItem] = []
         var matchingShelf: [TabItem] = []
         for tab in tabs {
-            let matches = filter.includes(state(tab))
+            let matches = filter == .needsYou ? (attention?(tab) ?? state(tab).needsAttention) : filter.includes(state(tab))
             if minimized.contains(tab.id) {
                 shelf.append(tab)
                 if matches { matchingShelf.append(tab) }

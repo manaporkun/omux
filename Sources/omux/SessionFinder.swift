@@ -10,6 +10,7 @@ enum SessionFinderScope: String, Identifiable, CaseIterable {
 extension TabRuntime {
     /// Explain the same canonical state that puts a session in the attention inbox.
     var attentionReason: String? {
+        guard requiresAttention else { return nil }
         switch CanvasSessionState(self) {
         case .interrupted: return "Interrupted"
         case .error: return "Error"
@@ -41,7 +42,7 @@ struct SessionFinderMatch: Identifiable {
     }
 
     func matches(terms: [String], scope: SessionFinderScope) -> Bool {
-        guard scope == .all || runtime.needsAttention || CanvasSessionState(runtime).needsAttention else { return false }
+        guard scope == .all || runtime.requiresAttention else { return false }
         return terms.allSatisfy { term in
             tab.name.localizedCaseInsensitiveContains(term) ||
                 group.name.localizedCaseInsensitiveContains(term) ||

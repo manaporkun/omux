@@ -36,8 +36,7 @@ struct ProjectSidebar: View {
     }
 
     private var sidebar: some View {
-        let attention = store.attentionSessions
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             HStack(spacing: 13) {
                 Spacer()
                 Menu {
@@ -71,44 +70,6 @@ struct ProjectSidebar: View {
             .help("Find a session across all projects (⌘K). Search projects above with ⌘P.")
             ScrollView {
                 VStack(alignment: .leading, spacing: 3) {
-                    if !attention.isEmpty {
-                        sectionLabel("Needs you (\(attention.count))", color: .orange)
-                        ForEach(attention.prefix(4), id: \.tab.id) { entry in
-                            let runtime = store.runtime[entry.tab.id] ?? TabRuntime()
-                            let reason = runtime.attentionReason ?? "Needs you"
-                            Button { store.focusSession(entry.tab.id) } label: {
-                                HStack(spacing: 7) {
-                                    SessionStateDot(state: CanvasSessionState(runtime))
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        HStack(spacing: 5) {
-                                            Text(entry.tab.name).lineLimit(1).layoutPriority(1)
-                                            Spacer(minLength: 2)
-                                            Text(entry.group.name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                                        }
-                                        Text(reason).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                }
-                                .font(.system(size: 11)).padding(.horizontal, 9).padding(.vertical, 7)
-                                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("\(entry.tab.name), \(reason), project \(entry.group.name)")
-                            .help("\(reason)\(runtime.statusDetail.map { ": \($0)" } ?? "") — \(entry.group.name)")
-                        }
-                        Button { store.openSessionFinder(scope: .attention) } label: {
-                            HStack {
-                                Text("View all \(attention.count)")
-                                Spacer()
-                                Image(systemName: "arrow.right")
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain).font(.system(size: 11))
-                        .padding(.horizontal, 9).padding(.vertical, 6)
-                        .help("Search all \(attention.count) sessions needing attention across projects")
-                        .accessibilityLabel("View all \(attention.count) sessions needing attention")
-                        Divider().padding(.vertical, 9)
-                    }
                     sectionLabel(query.isEmpty ? "Projects" : "Results")
                     if projects.isEmpty {
                         Text("No matching projects").font(.caption).foregroundStyle(.secondary).padding(10)
@@ -189,7 +150,7 @@ struct ProjectSidebar: View {
         let selected = store.selectedGroup?.id == group.id
         let showActions = selected || hoveredProject == group.id
         let states = group.tabs.map { CanvasSessionState(store.runtime[$0.id] ?? TabRuntime(exited: true)) }
-        let attention = states.filter(\.needsAttention).count
+        let attention = group.tabs.filter { store.runtime[$0.id]?.requiresAttention == true }.count
         let running = states.filter { $0 == .working || $0 == .running }.count
         return ZStack(alignment: .topTrailing) {
             Button { store.selectProject(group.id) } label: {

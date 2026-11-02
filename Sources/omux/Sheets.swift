@@ -28,6 +28,17 @@ struct QuickSwitcher: View {
                 Text(scope.label).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text("↑ ↓ select · Return open").font(.caption).foregroundStyle(.secondary)
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Close (Esc)")
+                .accessibilityLabel("Close session switcher")
+                .accessibilityIdentifier("session-finder-close")
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
