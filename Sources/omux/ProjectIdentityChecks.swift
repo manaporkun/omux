@@ -17,7 +17,14 @@ enum ProjectIdentityChecks {
                 }), let group = store.selectedGroup else { throw Failure("Requires disposable shell fixture") }
                 let original = group
                 let pid = group.tabs.first.flatMap { store.terminal(for: $0.id)?.process.shellPid }
-                store.editingGroupID = group.id
+                guard let mainWindow = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 500 }),
+                      let content = mainWindow.contentView, let row = SidebarInteractionChecks.frames[group.id] else { throw Failure("Missing project row") }
+                let point = NSPoint(x: row.maxX - 75, y: row.minY + 20)
+                let position = content.convert(NSPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y), to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: type, location: position, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: mainWindow.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) { NSApp.postEvent(event, atStart: false) }
+                }
                 try await Task.sleep(for: .milliseconds(500))
                 guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 500 }),
                       let sheet = window.attachedSheet else { throw Failure("Edit Project did not open") }
@@ -59,7 +66,7 @@ enum ProjectIdentityChecks {
                 try click("save", in: resetSheet)
                 try await Task.sleep(for: .milliseconds(600))
                 guard let reset = store.groups.first(where: { $0.id == group.id }), reset.icon == .folder, reset.color == .none else { throw Failure("Reset did not restore defaults") }
-                try write(["ok": true, "checks": ["All system icons exist", "Every icon preserves editor size", "Icon and color tile edges accept clicks", "Native icon/color selection and Save", "Persisted appearance", "Terminal and conversation identity preserved", "Cancel discards changes", "Reset restores defaults"]])
+                try write(["ok": true, "checks": ["Project row edit button opens editor directly", "All system icons exist", "Every icon preserves editor size", "Icon and color tile edges accept clicks", "Native icon/color selection and Save", "Persisted appearance", "Terminal and conversation identity preserved", "Cancel discards changes", "Reset restores defaults"]])
             } catch { try? write(["ok": false, "error": error.localizedDescription]) }
         }
     }

@@ -16,7 +16,10 @@ with the total and a refinement cue; an attention-only scope is available for in
 - Projects start in alphabetical order, with pinned projects first. Drag a project to a gap and
   release at the insertion line to move it within the same pin group.
   Custom order survives relaunch, and filtered-out projects keep their positions.
-  **Edit Project…** in the project context menu includes a live appearance preview, 12 system icons,
+  Hovering a project exposes Edit, Pin/Unpin, and New Session buttons. The selected project's
+  buttons remain visible. Rounded backgrounds, borders, and hover/pressed feedback make their
+  click targets clear. Edit opens the project editor directly without a context menu.
+  **Edit Project…** also remains in the context menu and includes a live appearance preview, 12 system icons,
   and a named color palette. The editor keeps a fixed size while icon choices use consistent boxes;
   fields and help text are spaced in separate groups. Save applies the identity to the sidebar and project headers; Cancel
   discards changes and Reset appearance restores the default folder and color. Pinned projects keep

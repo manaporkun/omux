@@ -6,6 +6,8 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Added
 
+- Project rows expose Edit, Pin/Unpin, and New Session buttons on hover and on the selected project,
+  with visible backgrounds and hover/pressed feedback.
 - Projects have configurable system icons and colors under Edit Project, with a preview and reset.
   Appearance persists in the workspace and is shared by the sidebar and project headers without
   changing session status styling.
