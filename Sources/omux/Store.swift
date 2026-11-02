@@ -1595,12 +1595,6 @@ extension Store {
         }
     }
 
-    func setWindowSize(_ size: GridWindowSize, in id: UUID) {
-        var state = canvas.project(id)
-        state.size = size
-        canvas.projects[id] = state
-    }
-
     func swapWindows(_ source: UUID, _ target: UUID) {
         guard let a = location(of: source), let b = location(of: target), a.group == b.group else { return }
         groups[a.group].tabs.swapAt(a.tab, b.tab)

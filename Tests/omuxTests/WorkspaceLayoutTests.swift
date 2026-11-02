@@ -45,7 +45,7 @@ final class WorkspaceLayoutTests: XCTestCase {
         layout.projectID = group.id
         layout.maximizedID = group.tabs[1].id
         layout.pinnedProjects.insert(group.id)
-        layout.projects[group.id] = ProjectCanvas(size: .large, minimized: [group.tabs[0].id])
+        layout.projects[group.id] = ProjectCanvas(minimized: [group.tabs[0].id])
         let workspace = Workspace(groups: [group], selectedTabID: group.tabs[1].id, canvas: layout)
         let restored = try JSONDecoder().decode(Workspace.self, from: JSONEncoder().encode(workspace))
         XCTAssertEqual(restored.canvas, layout)
@@ -61,7 +61,7 @@ final class WorkspaceLayoutTests: XCTestCase {
         layout.projectID = deletedGroup
         layout.maximizedID = deletedTab
         layout.pinnedProjects = [group.id, deletedGroup]
-        layout.projects[group.id] = ProjectCanvas(size: .small, minimized: [group.tabs[0].id, deletedTab])
+        layout.projects[group.id] = ProjectCanvas(minimized: [group.tabs[0].id, deletedTab])
         layout.projects[deletedGroup] = ProjectCanvas()
         layout.reconcile(groups: [group])
         XCTAssertEqual(layout.projectID, group.id)
@@ -72,7 +72,7 @@ final class WorkspaceLayoutTests: XCTestCase {
     }
 
     func testFourWindowsFitAsReadableLandscapeTerminals() {
-        let grid = TerminalGridLayout(count: 4, available: CGSize(width: 900, height: 650), size: .medium)
+        let grid = TerminalGridLayout(count: 4, available: CGSize(width: 900, height: 650))
         XCTAssertEqual(grid.columns, 2)
         XCTAssertGreaterThanOrEqual(grid.width, 300)
         XCTAssertGreaterThanOrEqual(grid.height, 170)
@@ -82,7 +82,7 @@ final class WorkspaceLayoutTests: XCTestCase {
     }
 
     func testCrowdedProjectScrollsRatherThanShrinkingTerminals() {
-        let grid = TerminalGridLayout(count: 16, available: CGSize(width: 810, height: 620), size: .medium)
+        let grid = TerminalGridLayout(count: 16, available: CGSize(width: 810, height: 620))
         XCTAssertEqual(grid.columns, 2)
         XCTAssertGreaterThanOrEqual(grid.width, 300)
         XCTAssertGreaterThanOrEqual(grid.height, 170)
@@ -90,19 +90,36 @@ final class WorkspaceLayoutTests: XCTestCase {
     }
 
     func testNarrowWindowPreservesReadableMinimumWithHorizontalScrolling() {
-        let grid = TerminalGridLayout(count: 2, available: CGSize(width: 200, height: 250), size: .large)
+        let grid = TerminalGridLayout(count: 2, available: CGSize(width: 200, height: 250))
         XCTAssertEqual(grid.columns, 1)
-        XCTAssertGreaterThanOrEqual(grid.width, 420)
-        XCTAssertGreaterThanOrEqual(grid.height, 230)
+        XCTAssertGreaterThanOrEqual(grid.width, 300)
+        XCTAssertGreaterThanOrEqual(grid.height, 170)
     }
 
     func testSingleTerminalDoesNotBecomePortraitOrExtremelyWide() {
-        for size in GridWindowSize.allCases {
-            for available in [CGSize(width: 1500, height: 400), CGSize(width: 600, height: 1200)] {
-                let grid = TerminalGridLayout(count: 1, available: available, size: size)
-                XCTAssertGreaterThanOrEqual(grid.width / grid.height, 1.29)
-                XCTAssertLessThanOrEqual(grid.width / grid.height, 2.81)
-            }
+        for available in [CGSize(width: 1500, height: 400), CGSize(width: 600, height: 1200)] {
+            let grid = TerminalGridLayout(count: 1, available: available)
+            XCTAssertGreaterThanOrEqual(grid.width / grid.height, 1.29)
+            XCTAssertLessThanOrEqual(grid.width / grid.height, 2.81)
+        }
+    }
+
+    func testAutomaticLayoutAdaptsColumnsToAvailableWidth() {
+        let narrow = TerminalGridLayout(count: 6, available: CGSize(width: 450, height: 700))
+        let wide = TerminalGridLayout(count: 6, available: CGSize(width: 1500, height: 700))
+        XCTAssertEqual(narrow.columns, 1)
+        XCTAssertGreaterThan(wide.columns, narrow.columns)
+        XCTAssertLessThanOrEqual(CGFloat(wide.columns) * wide.width + CGFloat(wide.columns - 1) * 12, 1500)
+    }
+
+    func testLegacySizeOverridesAreIgnoredWithoutLosingShelfState() throws {
+        let id = UUID()
+        for size in ["small", "medium", "large", "unknown"] {
+            let data = Data("{\"size\":\"\(size)\",\"minimized\":[\"\(id.uuidString)\"]}".utf8)
+            let decoded = try JSONDecoder().decode(ProjectCanvas.self, from: data)
+            XCTAssertEqual(decoded.minimized, [id])
+            let encoded = try JSONEncoder().encode(decoded)
+            XCTAssertNil((try JSONSerialization.jsonObject(with: encoded) as? [String: Any])?["size"])
         }
     }
 

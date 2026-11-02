@@ -39,8 +39,9 @@ with the total and a refinement cue; an attention-only scope is available for in
   when it differs from the checkout. The existing folder-path preference controls location display;
   relevant PR and subagent controls remain available. Branch, PR, and transcript actions target their
   own card without maximizing it; detailed review and transcripts stay in existing surfaces.
-- S/M/L controls the minimum terminal window size per project. The layout chooses readable landscape
-  windows; crowded projects scroll instead of becoming tiny thumbnails.
+- Terminal sizes and grid columns adapt automatically to the available viewport and visible session
+  count. There is no size selector; old saved S/M/L overrides are ignored. Crowded projects scroll
+  instead of shrinking terminals below a readable minimum.
 - Drag a window's header onto another window to swap their slots. The header grip shows an open-hand
   cursor and explains the gesture; a highlighted target shows “Release to swap slots.” Terminal text
   selection remains separate. No process is restarted and the active terminal stays the keyboard target.
@@ -53,7 +54,7 @@ with the total and a refinement cue; an attention-only scope is available for in
   **Restore matching** restores only matching shelf sessions and preserves the filter. Individual shelf
   chips remain available to restore any session and show All. Interrupted sessions belong to Needs you,
   not Idle; ended sessions still match Idle.
-- Workspace JSON preserves the active project, maximized session, size, pinned projects, shelf, and
+- Workspace JSON preserves the active project, maximized session, pinned projects, shelf, and
   window order. Older omux workspace files still load with default canvas settings.
 - **Codex limits** in the sidebar opens account quota percentages, window lengths, plan, reset times,
   and the last update time. Refresh is available; unsupported or signed-out accounts show unavailable
@@ -196,7 +197,7 @@ workspace and refuse agent/custom-command fixtures.
 With six or more sessions, the native checks emit real shell status records to exercise a bounded
 attention burst and the View all action. A nonempty second shell project exercises shelved
 cross-project overflow activation. A real worktree session exercises its compact branch action,
-S/M/L context, and the folder-path preference. Session Details checks render actual hosting,
+automatic sizing at different viewport widths, and the folder-path preference. Session Details checks render actual hosting,
 preference-change stability, mixed direct/managed quit counts, and a real shell exit; mixed-mode
 checks run only when tmux and the relay are available. Relay/host and three-launch persistence
 regressions remain covered by the verification commands below.

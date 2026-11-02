@@ -27,6 +27,8 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Changed
 
+- Terminal grids resize automatically with the viewport and visible session count. Removed S/M/L
+  controls and saved manual size overrides while preserving session order and shelf state.
 - New terminals, project opening, and workspace recovery no longer start configured agents implicitly.
   Existing persistent processes still reattach without duplicate startup. Start/Continue, Restart,
   provider-specific creation, worktree creation, and recent conversations remain explicit launches.

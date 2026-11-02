@@ -65,12 +65,6 @@ struct WorkspaceView: View {
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                         .help("Move idle and ended sessions to the shelf; their processes keep running")
                 }
-                Picker("Window size", selection: Binding(
-                    get: { settings.size }, set: { store.setWindowSize($0, in: group.id) }
-                )) {
-                    ForEach(GridWindowSize.allCases) { size in Text(size.label).tag(size) }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 98)
             }
             .font(.system(size: 11))
             .padding(.horizontal, 16).padding(.vertical, 9)
@@ -85,8 +79,7 @@ struct WorkspaceView: View {
             .padding(.horizontal, 16).padding(.vertical, 5)
             GeometryReader { geometry in
                 let layout = TerminalGridLayout(count: visible.count,
-                                                available: CGSize(width: geometry.size.width - 32, height: geometry.size.height - 28),
-                                                size: settings.size)
+                                                available: CGSize(width: geometry.size.width - 32, height: geometry.size.height - 28))
                 ZStack {
                     WorkspaceDots().foregroundStyle(.primary.opacity(theme.isLight ? 0.10 : 0.075))
                     if group.tabs.isEmpty {

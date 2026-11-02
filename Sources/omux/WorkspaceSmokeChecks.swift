@@ -188,7 +188,6 @@ enum WorkspaceSmokeChecks {
                 }
                 store.minimizeSession(first.id)
                 store.maximizeSession(second.id)
-                store.setWindowSize(.large, in: group.id)
                 // AppKit layout work can defer the run-loop debounce; wait for the actual saved state.
                 for _ in 0..<30 {
                     if let saved = Persistence.loadWorkspace(), saved.canvas == store.canvas,
@@ -199,9 +198,8 @@ enum WorkspaceSmokeChecks {
                       saved.groups.first?.tabs.map(\.id) == store.selectedGroup?.tabs.map(\.id) else {
                     throw CheckError.failed("Layout was not persisted")
                 }
-                checks.append("Order, shelf, size and maximized session persist")
+                checks.append("Order, shelf and maximized session persist")
                 store.restoreSession(first.id)
-                store.setWindowSize(.medium, in: group.id)
                 store.showAllWindows()
                 try await Task.sleep(for: .milliseconds(300))
                 store.minimizeSession(first.id)
@@ -409,19 +407,37 @@ enum WorkspaceSmokeChecks {
                     }
                     _ = snapshot("card-branch-changes.png")
                     UserDefaults.standard.set(false, forKey: Prefs.showFiles)
-                    for size in GridWindowSize.allCases {
-                        store.setWindowSize(size, in: group.id)
+                    let originalFrame = window.frame
+                    for width in [900, 1200] {
+                        window.setFrame(NSRect(origin: originalFrame.origin, size: NSSize(width: CGFloat(width), height: originalFrame.height)), display: true)
                         try await Task.sleep(for: .milliseconds(200))
-                        _ = snapshot("card-context-\(size.rawValue).png")
+                        _ = snapshot("card-context-auto-\(width).png")
                     }
+                    window.setFrame(originalFrame, display: true)
                     UserDefaults.standard.set(false, forKey: Prefs.showFolderPath)
                     try await Task.sleep(for: .milliseconds(200))
                     _ = snapshot("card-context-hidden.png")
                     UserDefaults.standard.set(true, forKey: Prefs.showFolderPath)
-                    store.setWindowSize(.medium, in: group.id)
-                    checks.append("Native card branch click targets its own checkout without maximizing/restarting; context renders at S/M/L and honors folder preference")
+                    checks.append("Native card branch click targets its own checkout without maximizing/restarting; context automatically adapts to window width and honors folder preference")
                 }
                 checks += try await checkSessionDetails(store, tab: first, group: group, window: window)
+                UserDefaults.standard.set(false, forKey: Prefs.showFiles)
+                store.restoreSession(first.id)
+                store.showAllWindows()
+                let originalFrame = window.frame
+                var automaticWidths: [Int] = []
+                for size in [NSSize(width: 1000, height: 700), NSSize(width: 1500, height: 900)] {
+                    window.setFrame(NSRect(origin: originalFrame.origin, size: size), display: true)
+                    try await Task.sleep(for: .milliseconds(300))
+                    automaticWidths.append(Int(firstView.bounds.width.rounded()))
+                    _ = snapshot("automatic-grid-\(Int(size.width)).png")
+                    guard store.terminal(for: first.id) === firstView, firstView.process.shellPid == firstPID else {
+                        throw CheckError.failed("Automatic resizing replaced the terminal or its process")
+                    }
+                }
+                window.setFrame(originalFrame, display: true)
+                guard Set(automaticWidths).count > 1 else { throw CheckError.failed("Terminal cards did not resize automatically") }
+                checks.append("Automatic grid sizing responds to viewport changes without replacing terminals or processes")
                 let image = snapshot("workspace.png")
                 try writeResult(["ok": true, "checks": checks, "snapshotWritten": image])
             } catch {
