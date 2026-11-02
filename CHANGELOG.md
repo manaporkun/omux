@@ -74,6 +74,7 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Fixed
 
+- Project icon and color choices accept clicks across their full padded tiles, with larger targets.
 - Project appearance choices keep the editor size stable, with consistent icon bounds and clearer
   spacing between labels, controls, and help text.
 - Closing the session finder restores keyboard focus to its selected terminal rather than leaving

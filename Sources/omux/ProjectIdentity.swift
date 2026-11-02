@@ -76,9 +76,10 @@ struct ProjectIdentityPicker: View {
                 ForEach(ProjectIcon.allCases) { choice in
                     Button { icon = choice } label: {
                         ProjectIdentityIcon(icon: choice, color: color)
-                            .frame(maxWidth: .infinity).frame(height: 28)
-                            .background(icon == choice ? Color.accentColor.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 5))
-                            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(icon == choice ? Color.accentColor : .clear))
+                            .frame(maxWidth: .infinity).frame(height: 40)
+                            .background(icon == choice ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(icon == choice ? Color.accentColor : .clear).allowsHitTesting(false))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).help(choice.label)
                     .projectIdentityCheckTarget("icon-" + choice.rawValue)
@@ -98,8 +99,9 @@ struct ProjectIdentityPicker: View {
                             }
                         }
                         .frame(width: 22, height: 22)
-                        .padding(2)
-                        .overlay(Circle().strokeBorder(color == choice ? Color.primary.opacity(0.65) : .clear))
+                        .padding(6)
+                        .overlay(Circle().strokeBorder(color == choice ? Color.primary.opacity(0.65) : .clear).allowsHitTesting(false))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .projectIdentityCheckTarget("color-" + choice.rawValue)

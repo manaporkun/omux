@@ -27,13 +27,13 @@ enum ProjectIdentityChecks {
                 }
                 let size = sheet.frame.size
                 for icon in ProjectIcon.allCases {
-                    try click("icon-" + icon.rawValue, in: sheet)
+                    try click("icon-" + icon.rawValue, in: sheet, nearEdge: true)
                     try await Task.sleep(for: .milliseconds(60))
                     guard sheet.frame.size == size else { throw Failure("Selecting \(icon.label) resized the editor") }
                 }
-                try click("icon-server", in: sheet)
+                try click("icon-server", in: sheet, nearEdge: true)
                 try await Task.sleep(for: .milliseconds(150))
-                try click("color-purple", in: sheet)
+                try click("color-purple", in: sheet, nearEdge: true)
                 try await Task.sleep(for: .milliseconds(150))
                 _ = WorkspaceSmokeChecks.snapshot("project-appearance-selected.png", window: sheet)
                 try click("save", in: sheet)
@@ -59,14 +59,14 @@ enum ProjectIdentityChecks {
                 try click("save", in: resetSheet)
                 try await Task.sleep(for: .milliseconds(600))
                 guard let reset = store.groups.first(where: { $0.id == group.id }), reset.icon == .folder, reset.color == .none else { throw Failure("Reset did not restore defaults") }
-                try write(["ok": true, "checks": ["All system icons exist", "Every icon preserves editor size", "Native icon/color selection and Save", "Persisted appearance", "Terminal and conversation identity preserved", "Cancel discards changes", "Reset restores defaults"]])
+                try write(["ok": true, "checks": ["All system icons exist", "Every icon preserves editor size", "Icon and color tile edges accept clicks", "Native icon/color selection and Save", "Persisted appearance", "Terminal and conversation identity preserved", "Cancel discards changes", "Reset restores defaults"]])
             } catch { try? write(["ok": false, "error": error.localizedDescription]) }
         }
     }
 
-    private static func click(_ target: String, in window: NSWindow) throws {
+    private static func click(_ target: String, in window: NSWindow, nearEdge: Bool = false) throws {
         guard let frame = frames[target] else { throw Failure("Missing editor control: \(target)") }
-        let point = NSPoint(x: frame.midX, y: frame.midY)
+        let point = nearEdge ? NSPoint(x: frame.minX + 5, y: frame.minY + 5) : NSPoint(x: frame.midX, y: frame.midY)
         guard let content = window.contentView else { return }
         let position = content.convert(NSPoint(x: point.x, y: content.isFlipped ? point.y : content.bounds.height - point.y), to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
