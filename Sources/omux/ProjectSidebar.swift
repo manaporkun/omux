@@ -6,15 +6,13 @@ struct ProjectSidebar: View {
     let theme: Theme
     @ViewState private var query = ""
     @FocusState private var searching: Bool
+    @ViewState private var dropSlot: ProjectDropSlot?
+    @ViewState private var draggingProject: UUID?
+    @ViewState private var projectFrames: [UUID: CGRect] = [:]
 
     private var projects: [TabGroup] {
-        store.groups.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
-            .sorted {
-                let a = store.canvas.pinnedProjects.contains($0.id), b = store.canvas.pinnedProjects.contains($1.id)
-                if a != b { return a }
-                let comparison = $0.name.localizedStandardCompare($1.name)
-                return comparison == .orderedSame ? $0.id.uuidString < $1.id.uuidString : comparison == .orderedAscending
-            }
+        store.canvas.orderedProjects(store.groups)
+            .filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
     }
 
     var body: some View {
@@ -118,6 +116,7 @@ struct ProjectSidebar: View {
                 }.padding(.horizontal, 8).padding(.bottom, 16)
             }
             Divider()
+            CodexUsageView()
             HStack(spacing: 7) {
                 Circle().fill(.green).frame(width: 5, height: 5)
                 Text("\(store.runningSessionCount) live sessions").monospacedDigit()
@@ -127,11 +126,33 @@ struct ProjectSidebar: View {
             }
             .font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 15).padding(.vertical, 12)
         }
+        .coordinateSpace(name: "projectSidebar")
+        .onPreferenceChange(ProjectRowFrames.self) {
+            projectFrames = $0
+            #if DEBUG
+            SidebarInteractionChecks.frames = $0
+            #endif
+        }
     }
 
     private func sectionLabel(_ text: String, color: Color = .secondary) -> some View {
         Text(text.uppercased()).font(.system(size: 9, weight: .semibold)).tracking(0.8)
             .foregroundStyle(color).padding(.horizontal, 9).padding(.top, 12).padding(.bottom, 6)
+    }
+
+    private var insertionLine: some View {
+        Rectangle().fill(Color.accentColor).frame(height: 2).allowsHitTesting(false)
+    }
+
+    private func insertionSlot(at point: CGPoint, source: UUID) -> ProjectDropSlot? {
+        let pinned = store.canvas.pinnedProjects.contains(source)
+        let candidates = projects.filter { store.canvas.pinnedProjects.contains($0.id) == pinned }
+        guard let first = candidates.first, let last = candidates.last,
+              let firstFrame = projectFrames[first.id], let lastFrame = projectFrames[last.id],
+              point.x >= firstFrame.minX, point.x <= firstFrame.maxX,
+              point.y >= firstFrame.minY - 8, point.y <= lastFrame.maxY + 8 else { return nil }
+        let before = candidates.first { projectFrames[$0.id].map { point.y < $0.midY } ?? false }?.id
+        return ProjectDropSlot(before: before, last: last.id)
     }
 
     private func projectRow(_ group: TabGroup) -> some View {
@@ -177,6 +198,34 @@ struct ProjectSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .top) {
+            if dropSlot?.before == group.id { insertionLine.offset(y: -2) }
+        }
+        .overlay(alignment: .bottom) {
+            if let slot = dropSlot, slot.before == nil, slot.last == group.id { insertionLine.offset(y: 2) }
+        }
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: ProjectRowFrames.self, value: [group.id: geometry.frame(in: .named("projectSidebar"))])
+            }
+        }
+        .opacity(draggingProject == group.id ? 0.55 : 1)
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 5, coordinateSpace: .named("projectSidebar"))
+                .onChanged { value in
+                    draggingProject = group.id
+                    dropSlot = insertionSlot(at: value.location, source: group.id)
+                }
+                .onEnded { value in
+                    let slot = insertionSlot(at: value.location, source: group.id)
+                    draggingProject = nil
+                    dropSlot = nil
+                    if let slot {
+                        _ = store.canvas.moveProject(group.id, before: slot.before, visibleProjects: projects.map(\.id), groups: store.groups)
+                    }
+                }
+        )
+        .help("Drag between projects and release at the insertion line to reorder. Pinned projects stay first.")
         .contextMenu {
             Button(store.canvas.pinnedProjects.contains(group.id) ? "Unpin Project" : "Pin Project") { store.togglePinned(group.id) }
             GroupMenu(group: group)
@@ -186,4 +235,16 @@ struct ProjectSidebar: View {
 
 extension Notification.Name {
     static let findWorkspaceProject = Notification.Name("omux.findWorkspaceProject")
+}
+
+private struct ProjectRowFrames: PreferenceKey {
+    static let defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct ProjectDropSlot: Equatable {
+    let before: UUID?
+    let last: UUID
 }

@@ -472,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.activate()
         _ = Updater.shared
         #if DEBUG
+        SidebarInteractionChecks.runIfRequested()
         WorkspaceSmokeChecks.runIfRequested()
         PersistenceSmokeChecks.runIfRequested()
         ExplicitLaunchSmokeChecks.runIfRequested()

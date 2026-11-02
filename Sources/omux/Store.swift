@@ -417,6 +417,7 @@ final class Store: ObservableObject {
         ]
         if let enc = inherited["__CF_USER_TEXT_ENCODING"] { env["__CF_USER_TEXT_ENCODING"] = enc }
         if let codexHome = inherited["CODEX_HOME"] { env["CODEX_HOME"] = codexHome }
+        if let claudeConfig = inherited["CLAUDE_CONFIG_DIR"] { env["CLAUDE_CONFIG_DIR"] = claudeConfig }
         let provider = tab.resolvedProvider(in: group)
         if provider == .codex {
             env["OMUX_CODEX_TOKEN"] = CodexManager.shared.connection(for: tab.id).token
@@ -612,6 +613,15 @@ final class Store: ObservableObject {
         guard let view = terminals[id] else { return }
         killTree(view)
         update(id) { $0.exited = true; $0.statusState = nil; $0.busy = false; $0.agentConnected = false }
+    }
+
+    /// Bounded status inspection of an already-attached terminal; never materializes a process.
+    func terminalContextProbe(_ id: UUID) -> (pid: pid_t, lines: [String])? {
+        guard runtime[id]?.exited == false, let view = terminals[id] else { return nil }
+        let pid = isHosted(id) ? sessionLocations[id]?.processID ?? 0 : view.process.shellPid
+        guard pid > 0 else { return nil }
+        let rows = view.terminalDimensions.rows
+        return (pid, view.visibleRowsText(max(0, rows - 6)..<rows))
     }
 
     /// Rescans the selected session's scrollback for file paths and local URLs (background, cheap).
@@ -906,7 +916,8 @@ final class Store: ObservableObject {
         guard !raw.isEmpty else { return nil }
         guard provider == .claude else { return raw }
         let session = tab.claudeSessionID.uuidString.lowercased()
-        return SessionProvider.claudeCommand(raw, sessionID: tab.claudeSessionID, conversationExists: Self.claudeSessionExists(session))
+        let command = SessionProvider.claudeCommand(raw, sessionID: tab.claudeSessionID, conversationExists: Self.claudeSessionExists(session))
+        return ClaudeContextUsage.instrument(command, raw: raw, directory: tab.directory ?? group.directory)
     }
 
     /// Claude Code writes each conversation to ~/.claude/projects/<project>/<session>.jsonl.

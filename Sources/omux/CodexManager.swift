@@ -101,6 +101,12 @@ final class CodexManager: ObservableObject {
     @Published private(set) var answering: Set<CodexApproval> = []
     @Published private(set) var limits: [UsageMonitor.Limit] = []
     @Published private(set) var usageError: String?
+    @Published private(set) var usageUpdatedAt: Date?
+    @Published private(set) var contextUsage: [String: CodexContextUsage] = [:]
+
+    func contextUsage(for tabID: UUID) -> CodexContextUsage? {
+        threads[tabID].flatMap { contextUsage[$0] }
+    }
     /// The account's plan, like "free" or "plus", from the last usage read.
     @Published private(set) var plan: String?
     @Published private(set) var agents: [UUID: [CodexAgent]] = [:]
@@ -264,6 +270,7 @@ final class CodexManager: ObservableObject {
         let ids = Set((threads[tabID].map { [$0] } ?? []) + (agents[tabID] ?? []).map(\.id))
         answering = answering.filter { !ids.contains($0.threadID) }
         for id in ids {
+            contextUsage[id] = nil
             approvals[id] = nil; turns[id] = nil; status[id] = nil; completedTurns[id] = nil; agentOwners[id] = nil
         }
         agents[tabID] = nil
@@ -316,7 +323,7 @@ final class CodexManager: ObservableObject {
         } else {
             // No Codex session yet: ask the catalog server, the one the recent list uses.
             do { try await catalog.connect() } catch {
-                quotaBucket = [:]; limits = []; usageError = error.localizedDescription
+                quotaBucket = [:]; limits = []; plan = nil; usageUpdatedAt = nil; usageError = error.localizedDescription
                 return
             }
             connection = catalog
@@ -325,18 +332,18 @@ final class CodexManager: ObservableObject {
             // A stale login makes the usage request fail with a 401; say so instead.
             let account = try await connection.request("account/read", params: ["refreshToken": true])
             guard account["account"] is [String: Any] else {
-                quotaBucket = [:]; limits = []; usageError = "Codex isn't signed in: run codex login"
+                quotaBucket = [:]; limits = []; plan = nil; usageUpdatedAt = nil; usageError = "Codex isn't signed in: run codex login"
                 return
             }
             let result = try await connection.request("account/rateLimits/read", params: ["excludeResetCreditDetails": true])
             applyLimits(result, replace: true)
         } catch {
-            quotaBucket = [:]; limits = []; usageError = "Codex usage unavailable"
+            quotaBucket = [:]; limits = []; plan = nil; usageUpdatedAt = nil; usageError = "Codex usage unavailable"
         }
     }
 
     private func applyLimits(_ result: [String: Any], replace: Bool = false) {
-        if replace { quotaBucket = [:] }
+        if replace { quotaBucket = [:]; plan = nil }
         if let bucket = result["rateLimits"] as? [String: Any] {
             if let planType = bucket["planType"] as? String, planType != "unknown" { plan = planType }
             for key in ["primary", "secondary"] {
@@ -348,12 +355,13 @@ final class CodexManager: ObservableObject {
             }
         }
         limits = ["primary", "secondary"].compactMap { key in
-            guard let raw = quotaBucket[key] as? [String: Any], let used = raw["usedPercent"] as? Int else { return nil }
+            guard let raw = quotaBucket[key] as? [String: Any], let used = raw["usedPercent"] as? Int, used >= 0 else { return nil }
             let minutes = raw["windowDurationMins"] as? Int ?? 0
-            let label = minutes >= 1440 ? "\(minutes / 1440)d" : minutes >= 60 ? "\(minutes / 60)h" : "\(minutes)m"
+            let label = minutes >= 1440 ? "\(minutes / 1440)d" : minutes >= 60 ? "\(minutes / 60)h" : minutes > 0 ? "\(minutes)m" : key.capitalized
             return UsageMonitor.Limit(id: "codex-" + key, label: label, percent: used,
                                       resetsAt: (raw["resetsAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) })
         }
+        usageUpdatedAt = limits.isEmpty ? nil : Date()
         usageError = limits.isEmpty ? "Codex usage unavailable for this account" : nil
     }
 
@@ -447,6 +455,10 @@ final class CodexManager: ObservableObject {
             guard let id = CodexRequestID(params["requestId"]) else { return }
             removeApproval(id, owner: owner)
             if let thread { publish(thread, CodexStatus(state: turns[thread] == nil ? .idle : .working)) }
+        case "thread/tokenUsage/updated":
+            guard let thread, threads[owner] == thread,
+                  let raw = params["tokenUsage"] as? [String: Any] else { return }
+            contextUsage[thread] = CodexContextUsage(raw)
         case "account/rateLimits/updated": applyLimits(params)
         default: break
         }
@@ -532,4 +544,21 @@ struct CodexConversation: Identifiable, Hashable {
             ?? (raw["preview"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Codex conversation"
         date = Date(timeIntervalSince1970: (raw["updatedAt"] as? NSNumber)?.doubleValue ?? 0)
     }
+}
+
+/// Latest reported model request usage, separate from cumulative conversation totals.
+struct CodexContextUsage: Sendable {
+    let tokens: Int
+    let window: Int?
+    let updatedAt: Date
+
+    init?(_ raw: [String: Any], updatedAt: Date = Date()) {
+        guard let last = raw["last"] as? [String: Any],
+              let tokens = last["totalTokens"] as? Int, tokens >= 0 else { return nil }
+        self.tokens = tokens
+        self.updatedAt = updatedAt
+        self.window = (raw["modelContextWindow"] as? Int).flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    var fraction: Double? { window.map { min(1, Double(tokens) / Double($0)) } }
 }

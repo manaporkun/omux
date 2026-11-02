@@ -13,7 +13,9 @@ terminal keyboard focus after the finder closes. Escape cancels. The finder show
 with the total and a refinement cue; an attention-only scope is available for inbox navigation.
 ⌥⌘N reveals and focuses the next session needing attention across projects.
 
-- Projects keep a stable alphabetical order, with pinned projects first. Their context menu includes
+- Projects start in alphabetical order, with pinned projects first. Drag a project to a gap and
+  release at the insertion line to move it within the same pin group.
+  Custom order survives relaunch, and filtered-out projects keep their positions. Their context menu includes
   pinning, editing, and opening a session. Status never reorders a project.
   Projects with more than eight sessions use a bounded textual total/running/attention summary instead
   of status dots, leaving the name on its own line. Smaller selected projects retain labeled dots.
@@ -44,6 +46,32 @@ with the total and a refinement cue; an attention-only scope is available for in
   not Idle; ended sessions still match Idle.
 - Workspace JSON preserves the active project, maximized session, size, pinned projects, shelf, and
   window order. Older omux workspace files still load with default canvas settings.
+- **Codex limits** in the sidebar opens account quota percentages, window lengths, plan, reset times,
+  and the last update time. Refresh is available; unsupported or signed-out accounts show unavailable
+  data rather than an invented balance. Polling uses the usage interval in Settings (minimum 30 seconds).
+  The selected terminal card always shows a context row below its title. Managed Codex sessions
+  report their last token count against the server's
+  reported model context window. It waits for `thread/tokenUsage/updated`, does not use cumulative
+  conversation tokens, does not infer an auto-compaction threshold, and is cleared on conversation
+  replacement. For a manually launched Codex, a read-only fallback identifies the exact descendant
+  Codex process and reads its open rollout file for reported token usage. For daemon-backed TUIs,
+  it resolves a complete conversation name from the model footer through Codex’s local state database
+  opened read-only, and reads the rollout only when the name is unique. Missing, truncated, or
+  duplicate names stay unavailable; no directory or recency matching is used. It can also mirror a
+  reported context percentage from the footer. The displayed model label is
+  matched to Codex's local catalog and shown explicitly as **Model capacity**; this is not a claim
+  about a session override or compaction threshold. Unknown/ambiguous processes or models remain
+  unavailable. Inspection is bounded and only runs for the selected card; no input or model turn is
+  submitted. Context can drop after compaction and is separate from subscription quota.
+- **Claude Code context** uses the same selected-card bar. Claude launches receive a command-level
+  status-line reporter that captures Claude’s reported context window and current input usage,
+  including cache reads/writes, without editing user or project settings. An existing status-line
+  command still receives its original input and keeps its output. Explicit `--settings` and
+  `--setting-sources` commands, unreadable settings, and managed-settings installations keep their
+  original launch configuration. Already-running sessions use a read-only transcript fallback keyed
+  by the saved session UUID; percentages require launching Claude with the reporter. Counts are from
+  the latest request, never cumulative totals or subagents. Compaction clears old transcript usage.
+  Ambiguous transcript locations and unknown window sizes remain unavailable.
 - The sidebar reports the actual number of live local sessions; it does not estimate agent memory use.
 - The accent keyboard-target indicator identifies the visible terminal used by session commands;
   orange unread and blocked/error/interrupted status remain independent. Retained selection alone
@@ -287,3 +315,16 @@ A Mac reboot still stops every process; only saved agent conversations and UI st
 Disk snapshots of terminal scrollback after a reboot, a “while you were away” summary, and inter-agent
 messaging are not implemented yet. The app does not own the provider's input draft: text typed into a
 live persistent terminal remains with that process, but drafts cannot be guaranteed after a reboot.
+
+`OMUX_SIDEBAR_INTERACTION_CHECK=1` plus a disposable `OMUX_WORKSPACE_DIRECTORY` runs the native
+project drag check. The fixture must contain exactly three shell-only projects whose names start
+with `Sidebar check ` and no startup commands. Real mouse events drag the first project to the gap
+after the last, then verify insertion order, unchanged terminal process, and saved workspace order.
+It writes `sidebar-interaction-checks.json` and before/after view snapshots; the selected card also
+shows its context-reporting state. Never use a real workspace for this fixture.
+
+For a read-only live context display check, launch the Dev app with
+`--env OMUX_CONTEXT_SNAPSHOT_DIRECTORY=/absolute/artifact/directory`. It captures the selected
+card after attachment and writes `context-check.json` and `context-card.png`, without submitting
+terminal input. `OMUX_CONTEXT_LIVE_ROOT=<verified-shell-pid> swift test --filter CodexTerminalContextTests`
+opts into a read-only process/catalog integration check. Default unit tests skip that live check.

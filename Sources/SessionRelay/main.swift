@@ -96,6 +96,42 @@ if CommandLine.arguments.dropFirst().first == "--self-test" {
     exit(0)
 }
 
+// Claude invokes this local reporter through per-launch statusLine settings.
+// Store only context counts, then pass the original input to the user's status line.
+if CommandLine.arguments.dropFirst().first == "--claude-context-statusline" {
+    guard CommandLine.arguments.count == 4 else { exit(64) }
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    if input.count <= 1024 * 1024,
+       let raw = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
+       let session = raw["session_id"] as? String, let id = UUID(uuidString: session),
+       let context = raw["context_window"] as? [String: Any] {
+        let directory = URL(fileURLWithPath: CommandLine.arguments[2])
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let report: [String: Any] = ["session_id": id.uuidString.lowercased(), "context_window": context,
+                                     "updated_at": Date().timeIntervalSince1970]
+        if let data = try? JSONSerialization.data(withJSONObject: report) {
+            try? data.write(to: directory.appendingPathComponent(id.uuidString.lowercased() + ".json"), options: .atomic)
+        }
+    }
+    let original = CommandLine.arguments[3]
+    if !original.isEmpty {
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.arguments = ["-c", original]
+        let pipe = Pipe()
+        child.standardInput = pipe
+        do {
+            try child.run()
+            try? pipe.fileHandleForWriting.write(contentsOf: input)
+            try? pipe.fileHandleForWriting.close()
+            child.waitUntilExit()
+            exit(child.terminationStatus)
+        } catch { exit(1) }
+    }
+    exit(0)
+}
+
 guard CommandLine.arguments.count == 2 else { exit(64) }
 let destination = URL(fileURLWithPath: CommandLine.arguments[1])
 var relay = StatusRelay()

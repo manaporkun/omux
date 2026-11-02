@@ -6,6 +6,13 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Added
 
+- Drag projects to an insertion line in the sidebar to reorder them. Custom order persists across
+  relaunches while preserving pinned groups and filtered-out project slots.
+- The workspace sidebar shows Codex subscription limits, reset times, and freshness details.
+  Selected cards show context usage from managed Codex, exact standalone Codex sources, and Claude
+  session reports/transcripts. Before usage is reported, recognized Codex models show catalog capacity.
+- Claude launches can report context through a per-launch status line wrapper while preserving the
+  user's existing status line and leaving settings files unchanged.
 - The sidebar footer shows the app version, a local build number that counts up on each build, and
   the commit it was built from, so the installed app and omux Dev can be told apart.
 - `./build.sh --no-updates` installs a build that never checks for updates, so a fork's build isn't

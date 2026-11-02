@@ -2,6 +2,32 @@ import XCTest
 @testable import omux
 
 final class CodexProtocolTests: XCTestCase {
+    @MainActor
+    func testContextUsageIsBoundToRootConversationAndClearedOnReplacement() {
+        let manager = CodexManager(), tab = UUID(), other = UUID()
+        manager.register(tabID: tab, threadID: "root")
+        manager.register(tabID: other, threadID: "other")
+        let event: [String: Any] = ["method": "thread/tokenUsage/updated", "params": [
+            "threadId": "root", "turnId": "turn", "tokenUsage": [
+                "last": ["totalTokens": 200], "total": ["totalTokens": 9000], "modelContextWindow": 1000]]]
+        manager.receive(event, owner: other)
+        XCTAssertNil(manager.contextUsage(for: tab))
+        manager.receive(event, owner: tab)
+        XCTAssertEqual(manager.contextUsage(for: tab)?.tokens, 200)
+        XCTAssertEqual(manager.contextUsage(for: tab)?.fraction, 0.2)
+        XCTAssertNil(manager.contextUsage(for: other))
+        manager.receive(["method": "thread/started", "params": ["thread": ["id": "replacement"]]], owner: tab)
+        XCTAssertNil(manager.contextUsage(for: tab))
+    }
+
+    func testContextUsageHandlesUnknownWindowAndMalformedCounts() {
+        XCTAssertNil(CodexContextUsage(["last": ["totalTokens": -1]]))
+        XCTAssertNil(CodexContextUsage(["total": ["totalTokens": 1000]]))
+        XCTAssertNil(CodexContextUsage(["last": ["totalTokens": 10], "modelContextWindow": 0])?.fraction)
+        XCTAssertNil(CodexContextUsage(["last": ["totalTokens": 10], "modelContextWindow": NSNull()])?.window)
+        XCTAssertEqual(CodexContextUsage(["last": ["totalTokens": 150], "modelContextWindow": 100])?.fraction, 1)
+    }
+
     func testWaitingForInputIsNotAToolApproval() {
         let state = CodexStatus.decode(["type": "active", "activeFlags": ["waitingOnUserInput"]])
         XCTAssertEqual(state?.state, .blocked)

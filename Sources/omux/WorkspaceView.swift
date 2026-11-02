@@ -373,6 +373,11 @@ private struct TerminalTile: View {
             .contentShape(Rectangle())
             .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
             Divider()
+            if store.selectedTabID == tab.id {
+                SessionContextBar(tabID: tab.id, provider: store.provider(of: tab))
+                    .background(Color(nsColor: theme.chrome))
+                Divider()
+            }
             SessionCardContextRow(tab: tab, group: group, runtime: runtime, theme: theme)
             SessionLocationStatus(sessionID: tab.id)
             WorktreeCleanupStatus(sessionID: tab.id)

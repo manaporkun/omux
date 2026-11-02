@@ -2,6 +2,34 @@ import XCTest
 @testable import omux
 
 final class WorkspaceLayoutTests: XCTestCase {
+    func testProjectDragOrderPersistsAndPreservesHiddenSlots() throws {
+        let groups = [TabGroup(name: "C"), TabGroup(name: "A"), TabGroup(name: "B")]
+        var canvas = CanvasWorkspace()
+        XCTAssertEqual(canvas.orderedProjects(groups).map(\.name), ["A", "B", "C"])
+        XCTAssertTrue(canvas.moveProject(groups[1].id, before: nil, visibleProjects: groups.map(\.id), groups: groups))
+        XCTAssertEqual(canvas.orderedProjects(groups).map(\.name), ["B", "C", "A"])
+        let restored = try JSONDecoder().decode(CanvasWorkspace.self, from: JSONEncoder().encode(canvas))
+        XCTAssertEqual(restored.orderedProjects(groups).map(\.name), ["B", "C", "A"])
+        canvas.pinnedProjects.insert(groups[1].id)
+        XCTAssertFalse(canvas.moveProject(groups[1].id, before: nil, visibleProjects: groups.map(\.id), groups: groups))
+        XCTAssertFalse(canvas.moveProject(UUID(), before: groups[0].id, visibleProjects: groups.map(\.id), groups: groups))
+        XCTAssertEqual(canvas.orderedProjects(groups).first?.name, "A")
+        canvas.reconcile(groups: Array(groups.dropFirst()))
+        XCTAssertFalse(canvas.projectOrder!.contains(groups[0].id))
+    }
+
+    func testProjectInsertionMovesNeighborsAndPreservesFilteredSlots() {
+        let groups = ["A", "B", "C", "D"].map { TabGroup(name: $0) }
+        var canvas = CanvasWorkspace()
+        XCTAssertTrue(canvas.moveProject(groups[2].id, before: groups[0].id, visibleProjects: groups.map(\.id), groups: groups))
+        XCTAssertEqual(canvas.orderedProjects(groups).map(\.name), ["C", "A", "B", "D"])
+        canvas.projectOrder = nil
+        XCTAssertTrue(canvas.moveProject(groups[0].id, before: nil, visibleProjects: [groups[0].id, groups[2].id, groups[3].id], groups: groups))
+        XCTAssertEqual(canvas.orderedProjects(groups).map(\.name), ["C", "B", "D", "A"])
+        canvas.pinnedProjects.insert(groups[0].id)
+        XCTAssertFalse(canvas.moveProject(groups[0].id, before: groups[2].id, visibleProjects: groups.map(\.id), groups: groups))
+    }
+
     func testLegacyWorkspaceLoadsWithoutCanvasState() throws {
         let json = Data(#"{"groups":[{"name":"Project","tabs":[{"name":"Existing","command":"codex","codexThreadID":"thread-123"}]}]}"#.utf8)
         let restored = try JSONDecoder().decode(Workspace.self, from: json)

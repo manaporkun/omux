@@ -6,6 +6,38 @@ struct CanvasWorkspace: Codable, Equatable {
     var maximizedID: UUID?
     var projects: [UUID: ProjectCanvas] = [:]
     var pinnedProjects: Set<UUID> = []
+    var projectOrder: [UUID]?
+
+    func orderedProjects(_ groups: [TabGroup]) -> [TabGroup] {
+        let ranks = Dictionary((projectOrder ?? []).enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
+        return groups.sorted {
+            let a = pinnedProjects.contains($0.id), b = pinnedProjects.contains($1.id)
+            if a != b { return a }
+            let ar = ranks[$0.id] ?? Int.max, br = ranks[$1.id] ?? Int.max
+            if ar != br { return ar < br }
+            let comparison = $0.name.localizedStandardCompare($1.name)
+            return comparison == .orderedSame ? $0.id.uuidString < $1.id.uuidString : comparison == .orderedAscending
+        }
+    }
+
+    /// Reorder visible slots only; filtering must not move hidden projects.
+    mutating func moveProject(_ source: UUID, before target: UUID?, visibleProjects: [UUID], groups: [TabGroup]) -> Bool {
+        let ordered = orderedProjects(groups).map(\.id)
+        let visible = Set(visibleProjects)
+        let pinned = pinnedProjects.contains(source)
+        let slots = ordered.indices.filter { visible.contains(ordered[$0]) && pinnedProjects.contains(ordered[$0]) == pinned }
+        var moving = slots.map { ordered[$0] }
+        guard let from = moving.firstIndex(of: source), source != target else { return false }
+        if let target, !moving.contains(target) { return false }
+        moving.remove(at: from)
+        let destination = target.flatMap { moving.firstIndex(of: $0) } ?? moving.endIndex
+        moving.insert(source, at: destination)
+        var result = ordered
+        for (slot, id) in zip(slots, moving) { result[slot] = id }
+        guard result != ordered else { return false }
+        projectOrder = result
+        return true
+    }
 
     func project(_ id: UUID) -> ProjectCanvas { projects[id] ?? ProjectCanvas() }
 
@@ -15,6 +47,7 @@ struct CanvasWorkspace: Codable, Equatable {
         if let id = projectID, !groupIDs.contains(id) { projectID = groups.first?.id }
         if let id = maximizedID, !tabIDs.contains(id) { maximizedID = nil }
         pinnedProjects.formIntersection(groupIDs)
+        projectOrder = projectOrder?.filter { groupIDs.contains($0) }
         projects = projects.filter { groupIDs.contains($0.key) }
         for group in groups where projects[group.id] != nil {
             projects[group.id]?.minimized.formIntersection(Set(group.tabs.map(\.id)))
