@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct GitHistoryPanel: View {
+    @EnvironmentObject private var store: Store
     @StateObject private var model = GitHistoryModel()
     @FocusState private var historyFocused: Bool
     let directory: String?
@@ -15,33 +16,22 @@ struct GitHistoryPanel: View {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
                     .padding(10).frame(maxWidth: .infinity, alignment: .leading)
             }
-            if directory == nil {
-                ContentUnavailableView("No project folder", systemImage: "folder", description: Text("Choose a project with a folder to inspect Git history."))
-            } else if let snapshot = model.snapshot {
-                if snapshot.root == nil {
-                    ContentUnavailableView("Not a Git repository", systemImage: "folder", description: Text("History will appear if this folder becomes a repository."))
-                } else if snapshot.commits.isEmpty {
-                    ContentUnavailableView("No commits yet", systemImage: "arrow.triangle.branch", description: Text("This repository has no commits in the selected history scope."))
-                } else {
-                    VSplitView {
-                        history.frame(minHeight: 140, idealHeight: 340)
-                        details.frame(minHeight: 140, idealHeight: 260)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !model.rows.isEmpty {
+                Divider()
+                HStack {
+                    Text("\(model.rows.count) commits · Read-only").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    if model.snapshot?.hasMore == true {
+                        if model.limit < 2000 {
+                            Button("Load more") { model.loadMore() }.disabled(model.loading).font(.caption)
+                        } else { Text("Latest 2,000 · Narrow the scope").font(.caption2).foregroundStyle(.secondary) }
                     }
-                }
-            } else if model.loading {
-                ProgressView("Loading local history…").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else { Spacer() }
-            Divider()
-            HStack {
-                Text("\(model.rows.count) commits · Read-only").font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                if model.snapshot?.hasMore == true {
-                    if model.limit < 2000 {
-                        Button("Load more") { model.loadMore() }.disabled(model.loading).font(.caption)
-                    } else { Text("Latest 2,000 · Narrow the scope").font(.caption2).foregroundStyle(.secondary) }
-                }
-            }.padding(8)
+                }.padding(8)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: theme.background))
         .coordinateSpace(name: "gitHistoryPanel")
         #if DEBUG
@@ -54,6 +44,47 @@ struct GitHistoryPanel: View {
         .onDisappear { model.stop() }
     }
 
+    @ViewBuilder
+    private var content: some View {
+        if directory == nil {
+            emptyState("Choose a repository", icon: "folder", message: "Open a project folder containing a Git repository to see its history.", canOpenFolder: true)
+        } else if let snapshot = model.snapshot {
+            if snapshot.root == nil {
+                emptyState("No Git history here", icon: "folder", message: "This project folder isn’t a Git repository. Open a repository folder to view its commits.", canOpenFolder: true)
+            } else if snapshot.commits.isEmpty {
+                emptyState("No commits yet", icon: "arrow.triangle.branch", message: model.allBranches
+                    ? "Your commit history will appear after the first commit."
+                    : "There are no commits in this checkout’s ancestry. Try All branches to inspect the rest of the repository.")
+            } else {
+                VSplitView {
+                    history.frame(minHeight: 140, idealHeight: 340)
+                    details.frame(minHeight: 140, idealHeight: 260)
+                }
+            }
+        } else if model.error != nil {
+            emptyState("History unavailable", icon: "exclamationmark.triangle", message: "Check the folder and repository access, then try refreshing.")
+        } else {
+            ProgressView("Loading local history…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func emptyState(_ title: String, icon: String, message: String, canOpenFolder: Bool = false) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 28, weight: .light)).foregroundStyle(.tertiary)
+                .frame(width: 48, height: 48)
+            Text(title).font(.system(size: 14, weight: .semibold))
+            Text(message).font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+            if canOpenFolder {
+                Button("Open project folder…") { store.openFolderPanel() }
+                    .buttonStyle(.bordered).controlSize(.regular).padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: 280).padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -63,10 +94,12 @@ struct GitHistoryPanel: View {
                 Button { model.refresh() } label: { Image(systemName: "arrow.clockwise").frame(width: 24, height: 24).contentShape(Rectangle()) }
                     .buttonStyle(.plain).disabled(model.loading).help("Refresh local history")
             }
-            Picker("History scope", selection: $model.allBranches) {
-                Text("All branches").tag(true)
-                Text("HEAD ancestry").tag(false)
-            }.pickerStyle(.segmented).labelsHidden()
+            if !model.rows.isEmpty || (model.snapshot?.root != nil && !model.allBranches) {
+                Picker("History scope", selection: $model.allBranches) {
+                    Text("All branches").tag(true)
+                    Text("HEAD ancestry").tag(false)
+                }.pickerStyle(.segmented).labelsHidden()
+            }
             if let snapshot = model.snapshot, snapshot.root != nil {
                 Text(snapshot.headLabel)
                     .font(.caption).lineLimit(1).help(snapshot.head ?? "No HEAD commit")

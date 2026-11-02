@@ -366,7 +366,9 @@ Repository work, graph construction, and commit-detail reads run off the main th
 checkout Git-directory, and common Git-directory watchers refresh history, including changes from
 other linked worktrees. Refresh retains a selected commit while it remains loaded. A ten-second
 fallback covers missed events and newly initialized repositories. Closing the panel stops monitoring.
-Non-Git folders and empty repositories have dedicated states, and errors are shown without silently
+Empty states keep the header at the top and fill the available panel height. Non-Git folders offer
+**Open project folder…**; unused scope and count controls are hidden. Empty repositories have a
+first-commit explanation, and errors are shown without silently
 switching folders. Inspection never fetches, stages, checks out, or changes Git objects/index/refs.
 
 `GitHistoryTests` creates disposable real repositories to check merges, references, detached HEAD,

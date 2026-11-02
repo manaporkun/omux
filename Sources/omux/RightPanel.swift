@@ -36,7 +36,7 @@ struct RightPanel: View {
             // area they touch, and the tab bar sits in the title bar's. The hairline keeps them apart.
             Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
 
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 // Files stays alive so its preview and scroll position survive tab switches.
                 FilePanel(root: root, theme: theme)
                     .opacity(current == .files ? 1 : 0)

@@ -54,9 +54,13 @@ enum GitHistoryChecks {
                     store.selectProject(project.id)
                     try await wait { model.directory == project.directory && !model.loading && model.snapshot != nil && model.selectedID == nil }
                     try await Task.sleep(for: .milliseconds(150))
+                    guard let panel = Self.anchor, let content = window.contentView,
+                          panel.bounds.height >= content.bounds.height * 0.85 else {
+                        throw GitHistory.Failure("Empty history panel collapsed instead of filling the available height")
+                    }
                     _ = WorkspaceSmokeChecks.snapshot("git-history-\(project.name.hasSuffix("Empty") ? "empty" : "nonrepo").png", window: window)
                 }
-                checks.append("Non-Git and empty project states clear stale history")
+                checks.append("Non-Git and empty states fill the panel and clear stale history")
                 store.selectProject(group.id)
                 try await wait { model.snapshot?.head != nil && model.detail != nil }
                 let old = model.selectedID

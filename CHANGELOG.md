@@ -78,6 +78,8 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Fixed
 
+- Empty Git History views fill the panel and keep their header at the top. Unused scope/count
+  controls are hidden and non-repository folders offer a direct Open project folder action.
 - Project icon and color choices accept clicks across their full padded tiles, with larger targets.
 - Project appearance choices keep the editor size stable, with consistent icon bounds and clearer
   spacing between labels, controls, and help text.
