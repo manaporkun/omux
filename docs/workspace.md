@@ -17,7 +17,8 @@ with the total and a refinement cue; an attention-only scope is available for in
   release at the insertion line to move it within the same pin group.
   Custom order survives relaunch, and filtered-out projects keep their positions.
   **Edit Project…** in the project context menu includes a live appearance preview, 12 system icons,
-  and a named color palette. Save applies the identity to the sidebar and project headers; Cancel
+  and a named color palette. The editor keeps a fixed size while icon choices use consistent boxes;
+  fields and help text are spaced in separate groups. Save applies the identity to the sidebar and project headers; Cancel
   discards changes and Reset appearance restores the default folder and color. Pinned projects keep
   their own pin indicator, and session status remains separate. Appearance survives relaunch and
   does not alter sessions or their order. Their context menu includes

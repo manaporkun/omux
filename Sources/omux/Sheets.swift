@@ -305,36 +305,61 @@ struct GroupEditSheet: View {
     @ViewState private var color = TabColor.none
 
     var body: some View {
-        Form {
-            TextField("Name", text: $name)
-            ProjectIdentityPicker(icon: $icon, color: $color, name: name)
-            HStack {
-                TextField("Folder", text: $directory, prompt: Text("~"))
-                Button("Choose…") { if let dir = chooseDirectory(current: directory) { directory = dir } }
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Project name").font(.caption).foregroundStyle(.secondary)
+                        TextField("Name", text: $name)
+                    }
+                    ProjectIdentityPicker(icon: $icon, color: $color, name: name)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Folder").font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            TextField("Folder", text: $directory, prompt: Text("~"))
+                            Button("Choose…") { if let dir = chooseDirectory(current: directory) { directory = dir } }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Agent for Start", selection: $provider) {
+                            ForEach(SessionProvider.allCases) { Text($0.label).tag($0) }
+                        }
+                        if provider == .custom { TextField("Command", text: $command) }
+                        Text("New sessions open as shells. Use Start to launch the agent; existing sessions keep running.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Give new agent sessions their own Git worktree", isOn: $useWorktrees)
+                        Text("Worktree setup").font(.caption).foregroundStyle(.secondary)
+                        TextField("Worktree setup", text: $worktreeSetup, prompt: Text("cp \"$OMUX_REPO/.env\" . && npm install"))
+                            .font(.system(.body, design: .monospaced))
+                        Text(WorktreeSetupHint.text)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .textFieldStyle(.roundedBorder)
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Picker("Agent for Start", selection: $provider) {
-                ForEach(SessionProvider.allCases) { Text($0.label).tag($0) }
-            }
-            if provider == .custom {
-                TextField("Command", text: $command)
-            }
-            Text("New sessions open as shells. Use Start or an explicit agent action to run this command; existing sessions keep running.")
-                .font(.caption).foregroundStyle(.secondary)
-            Toggle("Give new agent sessions their own Git worktree", isOn: $useWorktrees)
-            TextField("Worktree setup", text: $worktreeSetup, prompt: Text("cp \"$OMUX_REPO/.env\" . && npm install"))
-                .font(.system(.body, design: .monospaced))
-            Text(WorktreeSetupHint.text)
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
+            Divider()
+            HStack(spacing: 10) {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .projectIdentityCheckTarget("cancel")
                 Button("Save") { save() }.keyboardShortcut(.defaultAction)
+                    .projectIdentityCheckTarget("save")
             }
+            .padding(16)
         }
-        .padding(20)
-        .frame(width: 460)
+        .frame(width: 520, height: 660)
         .background(Color(nsColor: .windowBackgroundColor))
+        .coordinateSpace(name: "projectEditor")
+        #if DEBUG
+        .onPreferenceChange(ProjectIdentityControlFrames.self) { ProjectIdentityChecks.frames = $0 }
+        #endif
         .onAppear {
             guard let group = store.groups.first(where: { $0.id == groupID }) else { return }
             name = group.name

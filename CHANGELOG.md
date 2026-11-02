@@ -74,6 +74,8 @@ All notable changes to omux are listed here. Versions follow [Semantic Versionin
 
 ### Fixed
 
+- Project appearance choices keep the editor size stable, with consistent icon bounds and clearer
+  spacing between labels, controls, and help text.
 - Closing the session finder restores keyboard focus to its selected terminal rather than leaving
   the previous terminal as the native responder.
 - Start and Restart can recover an owned tmux pane after its process dies, including when tmux

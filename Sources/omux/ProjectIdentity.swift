@@ -47,6 +47,7 @@ struct ProjectIdentityIcon: View {
 
     var body: some View {
         Image(systemName: icon.symbol)
+            .frame(width: 22, height: 22)
             .foregroundStyle(color.color ?? .secondary)
             .accessibilityLabel("\(icon.label) project icon, \(color == .none ? "default color" : color.rawValue)")
     }
@@ -67,6 +68,7 @@ struct ProjectIdentityPicker: View {
                 Spacer()
                 Button("Reset appearance") { icon = .folder; color = .none }
                     .font(.caption).fixedSize()
+                    .projectIdentityCheckTarget("reset")
                     .disabled(icon == .folder && color == .none)
             }
             Text("Project icon").font(.caption).foregroundStyle(.secondary)
@@ -79,6 +81,7 @@ struct ProjectIdentityPicker: View {
                             .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(icon == choice ? Color.accentColor : .clear))
                     }
                     .buttonStyle(.plain).help(choice.label)
+                    .projectIdentityCheckTarget("icon-" + choice.rawValue)
                     .accessibilityLabel(choice.label + " icon")
                     .accessibilityAddTraits(icon == choice ? [.isSelected] : [])
                 }
@@ -99,6 +102,7 @@ struct ProjectIdentityPicker: View {
                         .overlay(Circle().strokeBorder(color == choice ? Color.primary.opacity(0.65) : .clear))
                     }
                     .buttonStyle(.plain)
+                    .projectIdentityCheckTarget("color-" + choice.rawValue)
                     .help(choice == .none ? "Default color" : choice.rawValue.capitalized)
                     .accessibilityLabel(choice == .none ? "Default project color" : choice.rawValue.capitalized + " project color")
                     .accessibilityAddTraits(color == choice ? [.isSelected] : [])
@@ -107,5 +111,30 @@ struct ProjectIdentityPicker: View {
         }
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+#if DEBUG
+struct ProjectIdentityControlFrames: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+#endif
+
+extension View {
+    /// Records native-test targets without affecting production layout.
+    func projectIdentityCheckTarget(_ name: String) -> some View {
+        #if DEBUG
+        self.background {
+            GeometryReader { geometry in
+                Color.clear.preference(key: ProjectIdentityControlFrames.self,
+                    value: [name: geometry.frame(in: .named("projectEditor"))])
+            }
+        }
+        #else
+        self
+        #endif
     }
 }
