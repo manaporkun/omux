@@ -50,6 +50,7 @@ final class Store: ObservableObject {
     @Published var editingGroupID: UUID?
     @Published var sessionFinderScope: SessionFinderScope?
     @Published var showRecentSessions = false
+    @Published var showCloneRepository = false
     @Published var showWelcome = false
     /// A file the user ⌘-clicked in a terminal; the files panel shows it.
     @Published var previewRequest: String?

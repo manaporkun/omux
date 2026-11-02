@@ -267,6 +267,7 @@ struct ContentView: View {
         }) { scope in
             QuickSwitcher(scope: scope).environmentObject(store)
         }
+        .sheet(isPresented: $store.showCloneRepository) { CloneRepositorySheet().environmentObject(store) }
         .sheet(isPresented: $store.showRecentSessions) { RecentSessionsSheet().environmentObject(store) }
         .sheet(isPresented: $store.showWelcome) { WelcomeSheet().environmentObject(store) }
         .sheet(item: $store.editingTabID) { TabEditSheet(tabID: $0).environmentObject(store) }
@@ -370,6 +371,7 @@ struct AppCommands: Commands {
             Button("New Project") { store.newGroup() }.keyboardShortcut("n", modifiers: [.command, .shift])
             Divider()
             Button("Open Folder…") { store.openFolderPanel() }.keyboardShortcut("o")
+            Button("Clone Repository…") { store.showCloneRepository = true }
             Button("Open Recent Conversation…") { store.showRecentSessions = true }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
         }

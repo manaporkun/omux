@@ -40,8 +40,11 @@ struct ProjectSidebar: View {
         return VStack(spacing: 0) {
             HStack(spacing: 13) {
                 Spacer()
-                Button { store.openFolderPanel() } label: { Image(systemName: "folder.badge.plus") }
-                    .help("Open folder as project (⌘O)")
+                Menu {
+                    Button("Open Folder…") { store.openFolderPanel() }
+                    Button("Clone Repository…") { store.showCloneRepository = true }
+                } label: { Image(systemName: "folder.badge.plus") }
+                    .help("Open or clone a project (⌘O opens a folder)")
                 Button { store.showRecentSessions = true } label: { Image(systemName: "clock.arrow.circlepath") }
                     .help("Recent conversations (⇧⌘O)")
                 SettingsLink { Image(systemName: "gearshape") }
@@ -111,7 +114,10 @@ struct ProjectSidebar: View {
                         Text("No matching projects").font(.caption).foregroundStyle(.secondary).padding(10)
                     }
                     ForEach(projects) { group in projectRow(group) }
-                    Button { store.openFolderPanel() } label: { Label("Open a project…", systemImage: "plus") }
+                    Menu {
+                        Button("Open Folder…") { store.openFolderPanel() }
+                        Button("Clone Repository…") { store.showCloneRepository = true }
+                    } label: { Label("Open a project…", systemImage: "plus") }
                         .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
                         .padding(.horizontal, 9).padding(.top, 14)
                 }.padding(.horizontal, 8).padding(.bottom, 16)

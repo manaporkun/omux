@@ -33,8 +33,11 @@ struct Sidebar: View {
                 Spacer()
                 Button { store.newTab() } label: { Image(systemName: "plus") }
                     .help("New session in current project (⌘T)")
-                Button { store.openFolderPanel() } label: { Image(systemName: "folder.badge.plus") }
-                    .help("Open folder as a project (⌘O)")
+                Menu {
+                    Button("Open Folder…") { store.openFolderPanel() }
+                    Button("Clone Repository…") { store.showCloneRepository = true }
+                } label: { Image(systemName: "folder.badge.plus") }
+                    .help("Open or clone a project (⌘O opens a folder)")
                 Button { store.showRecentSessions = true } label: { Image(systemName: "clock.arrow.circlepath") }
                     .help("Open recent conversation (⇧⌘O)")
                 SettingsLink { Image(systemName: "gearshape") }
